@@ -58,8 +58,15 @@
  */
 #define ST7789_INVERT 0
 
-/** Set to 1 when the module drives its backlight from BLK pulled low. */
-#define ST7789_BLK_ACTIVE_LOW 0
+/**
+ * Set to 1 when the module lights its backlight with BLK pulled *low* (LED
+ * cathode on the pin, or a PNP/P-FET driver).
+ *
+ * The giveaway: with this at 0 on an active-low module the panel is lit while
+ * the driver is still initialising - when the code asks for 0 % - and then
+ * fades out as the splash ramps the duty up to 100 %.
+ */
+#define ST7789_BLK_ACTIVE_LOW 1
 
 /** Reset the panel, run the init sequence and turn the display on. */
 void st7789_init(void);
