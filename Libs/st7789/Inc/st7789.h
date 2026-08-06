@@ -86,4 +86,41 @@ void st7789_fill(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
  */
 void st7789_backlight(uint8_t percent);
 
+/**
+ * @brief Re-send MADCTL and INVON/INVOFF at runtime.
+ *
+ * Lets Ui_ColorSweep() walk the colour-order and inversion combinations
+ * without reflashing. @p bgr sets MADCTL bit 3, @p invert chooses INVON over
+ * INVOFF. Both are otherwise fixed at boot by ST7789_BGR / ST7789_INVERT.
+ */
+void st7789_set_color_mode(bool bgr, bool invert);
+
+/** Frame memory the controller carries, regardless of the panel window. */
+#define ST7789_GRAM_W 240
+#define ST7789_GRAM_H 320
+
+/**
+ * @brief Flood a rectangle addressed in raw frame-memory coordinates.
+ *
+ * Ignores ST7789_X_OFFSET / ST7789_Y_OFFSET, so it can reach parts of the
+ * 240x320 memory that the panel window does not cover. Only useful for working
+ * out where that window actually is - see st7789_gram_probe().
+ */
+void st7789_raw_fill(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1,
+                     uint16_t color);
+
+/**
+ * @brief Locate the panel window inside frame memory. Never returns.
+ *
+ * Cycles through three stages:
+ *  1. whole frame memory red - if the panel stays white through this one it is
+ *     not executing commands at all and no offset will help;
+ *  2. the 240 columns split into thirds, red / green / blue - whichever colour
+ *     fills the screen says which third the window sits in;
+ *  3. the 320 rows split into thirds the same way.
+ *
+ * With the offsets in this header correct, stages 2 and 3 both come out green.
+ */
+void st7789_gram_probe(void);
+
 #endif /* __ST7789_H__ */

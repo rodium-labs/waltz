@@ -285,6 +285,59 @@ void st7789_fill(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
   cs_high();
 }
 
+void st7789_set_color_mode(bool bgr, bool invert) {
+  uint8_t madctl = (uint8_t)(MADCTL_ROTATION | (bgr ? MADCTL_BGR : 0U));
+
+  wr_cmd_args(CMD_MADCTL, &madctl, 1);
+  wr_cmd_args(invert ? CMD_INVON : CMD_INVOFF, NULL, 0);
+}
+
+void st7789_raw_fill(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1,
+                     uint16_t color) {
+  uint32_t count = (uint32_t)(x1 - x0 + 1U) * (uint32_t)(y1 - y0 + 1U);
+
+  fill_word = color;
+
+  cs_low();
+  set_window_raw(x0, y0, x1, y1);
+  spi16_begin();
+  dma_pixels(&fill_word, count, 0U);
+  spi16_end();
+  cs_high();
+}
+
+void st7789_gram_probe(void) {
+  /* Stored byte-swapped so the wire gets RGB565 high byte first, matching
+   * GFX_WIRE_SWAP in gfx.h. */
+  const uint16_t red = 0x00F8U;   /* wire F8 00 */
+  const uint16_t green = 0xE007U; /* wire 07 E0 */
+  const uint16_t blue = 0x1F00U;  /* wire 00 1F */
+  const uint16_t black = 0x0000U;
+
+  /* Half duty stays visible whichever way round BLK is wired. */
+  st7789_backlight(50);
+
+  for (;;) {
+    /* Stage 1 - the whole 240x320. White here means no commands are landing. */
+    st7789_raw_fill(0, 0, ST7789_GRAM_W - 1U, ST7789_GRAM_H - 1U, red);
+    HAL_Delay(1800);
+    st7789_raw_fill(0, 0, ST7789_GRAM_W - 1U, ST7789_GRAM_H - 1U, black);
+    HAL_Delay(500);
+
+    /* Stage 2 - which third of the columns the 76 px window sits in. */
+    st7789_raw_fill(0, 0, 79, ST7789_GRAM_H - 1U, red);
+    st7789_raw_fill(80, 0, 159, ST7789_GRAM_H - 1U, green);
+    st7789_raw_fill(160, 0, ST7789_GRAM_W - 1U, ST7789_GRAM_H - 1U, blue);
+    HAL_Delay(3500);
+
+    /* Stage 3 - which third of the rows the 284 px window sits in. */
+    st7789_raw_fill(0, 0, ST7789_GRAM_W - 1U, 105, red);
+    st7789_raw_fill(0, 106, ST7789_GRAM_W - 1U, 212, green);
+    st7789_raw_fill(0, 213, ST7789_GRAM_W - 1U, ST7789_GRAM_H - 1U, blue);
+    HAL_Delay(3500);
+  }
+}
+
 void st7789_backlight(uint8_t percent) {
   if (percent > 100U) {
     percent = 100U;
