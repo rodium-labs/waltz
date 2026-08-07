@@ -47,10 +47,11 @@
 #endif
 
 /**
- * This panel reports colours in BGR order, so the controller is told to swap
- * them on the way into frame memory.
+ * Set to 1 for a module that reports colours in BGR order. This panel does not:
+ * measured with Ui_ColorSweep(), which came out clean on plain RGB565 with no
+ * swap and no inversion once the pixel path stopped mangling bytes.
  */
-#define ST7789_BGR 1
+#define ST7789_BGR 0
 
 /**
  * Many IPS ST7789 panels need display inversion on; this one does not. Flip to
