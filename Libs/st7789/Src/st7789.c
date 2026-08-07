@@ -82,11 +82,26 @@ static void wr_args(const uint8_t *args, uint16_t len) {
   HAL_SPI_Transmit(&hspi1, (uint8_t *)args, len, 500);
 }
 
-static void wr_cmd_args(uint8_t cmd, const uint8_t *args, uint16_t len) {
+/** Command + parameters with CS already held low by the caller. */
+static void wr_cmd_args_nocs(uint8_t cmd, const uint8_t *args, uint16_t len) {
   wr_cmd(cmd);
   if (len) {
     wr_args(args, len);
   }
+}
+
+/**
+ * Command + parameters as a self-contained transaction.
+ *
+ * CS is pulsed per command rather than held low across the whole init: some
+ * ST7789 clones reset their internal bit counter on the CS rising edge, and
+ * without it a long unbroken stream can lose command framing - which shows up
+ * as a panel that never leaves its power-on white.
+ */
+static void wr_cmd_args(uint8_t cmd, const uint8_t *args, uint16_t len) {
+  cs_low();
+  wr_cmd_args_nocs(cmd, args, len);
+  cs_high();
 }
 
 /* Pixel path -------------------------------------------------------------- */
@@ -165,13 +180,13 @@ static void set_window_raw(uint16_t x0, uint16_t y0, uint16_t x1,
   win[1] = (uint8_t)x0;
   win[2] = (uint8_t)(x1 >> 8);
   win[3] = (uint8_t)x1;
-  wr_cmd_args(CMD_CASET, win, 4);
+  wr_cmd_args_nocs(CMD_CASET, win, 4);
 
   win[0] = (uint8_t)(y0 >> 8);
   win[1] = (uint8_t)y0;
   win[2] = (uint8_t)(y1 >> 8);
   win[3] = (uint8_t)y1;
-  wr_cmd_args(CMD_RASET, win, 4);
+  wr_cmd_args_nocs(CMD_RASET, win, 4);
 
   wr_cmd(CMD_RAMWR);
   dc_data();
@@ -207,8 +222,6 @@ void st7789_init(void) {
   HAL_Delay(20);
   HAL_GPIO_WritePin(LCD_RST_GPIO_Port, LCD_RST_Pin, GPIO_PIN_SET);
   HAL_Delay(150);
-
-  cs_low();
 
   wr_cmd_args(CMD_SWRESET, NULL, 0);
   HAL_Delay(150);
@@ -247,8 +260,6 @@ void st7789_init(void) {
   HAL_Delay(10);
   wr_cmd_args(CMD_DISPON, NULL, 0);
   HAL_Delay(120);
-
-  cs_high();
 
   /* Clear the whole panel before the backlight comes up, so the user never
    * sees the random contents frame memory holds after power-on. */
