@@ -51,9 +51,9 @@
 #define MADCTL_VALUE (MADCTL_ROTATION)
 #endif
 
-/* Source halfword for buffer-less colour fills. Lives in SRAM so the DMA can
- * read it repeatedly with address increment turned off. */
-static uint16_t fill_word;
+/* Staging run for colour fills. Lives in SRAM for the DMA to walk. */
+#define FILL_RUN 128U
+static uint16_t fill_run[FILL_RUN];
 
 /* Pin helpers -------------------------------------------------------------- */
 
@@ -107,39 +107,36 @@ static void wr_cmd_args(uint8_t cmd, const uint8_t *args, uint16_t len) {
 /* Pixel path -------------------------------------------------------------- */
 
 /**
- * Widen the data frame to 16 bits and hand the TX line to the DMA.
+ * Pixels leave as plain bytes, never as 16-bit frames.
  *
- * HAL is bypassed on purpose: hspi1.Init still says 8 bit, so as long as the
- * frame width is restored before returning, the next HAL_SPI_Transmit() for a
- * command behaves exactly as configured.
+ * An earlier version widened SPI to DFF=16 for the pixel burst and switched
+ * back for commands. That is the one thing this driver did that no other
+ * ST7789 driver does, and once every controller-side colour configuration had
+ * been ruled out on hardware - all eight of them, see Ui_ColorSweep() - a data
+ * path that unusual was the only suspect left. Bytes now go out untouched, so
+ * the caller's buffer must already hold pixels in wire order; GFX_WIRE_SWAP in
+ * gfx.h owns that.
  */
-static void spi16_begin(void) {
+static void spi_dma_begin(void) {
   while (SPI1->SR & SPI_SR_BSY) {
   }
-  SPI1->CR1 &= ~SPI_CR1_SPE;
-  SPI1->CR1 |= SPI_CR1_DFF;
   SPI1->CR2 |= SPI_CR2_TXDMAEN;
-  SPI1->CR1 |= SPI_CR1_SPE;
 }
 
-static void spi16_end(void) {
+static void spi_dma_end(void) {
   while (!(SPI1->SR & SPI_SR_TXE)) {
   }
   while (SPI1->SR & SPI_SR_BSY) {
   }
-  SPI1->CR1 &= ~SPI_CR1_SPE;
   SPI1->CR2 &= ~SPI_CR2_TXDMAEN;
-  SPI1->CR1 &= ~SPI_CR1_DFF;
-  SPI1->CR1 |= SPI_CR1_SPE;
 }
 
 /**
- * @brief Blocking DMA push of @p count halfwords to SPI1.
+ * @brief Blocking DMA push of @p count bytes to SPI1.
  * @param src   Source address in SRAM.
- * @param count Number of 16 bit pixels.
- * @param minc  DMA_SxCR_MINC to walk the buffer, 0 to repeat one halfword.
+ * @param count Number of bytes.
  */
-static void dma_pixels(const void *src, uint32_t count, uint32_t minc) {
+static void dma_bytes(const void *src, uint32_t count) {
   while (count) {
     uint32_t chunk = (count > 65535U) ? 65535U : count;
 
@@ -149,10 +146,9 @@ static void dma_pixels(const void *src, uint32_t count, uint32_t minc) {
     DMA2_Stream3->PAR = (uint32_t)&SPI1->DR;
     DMA2_Stream3->M0AR = (uint32_t)src;
     DMA2_Stream3->NDTR = chunk;
-    /* channel 3 = SPI1_TX, memory -> peripheral, 16 bit both sides */
+    /* channel 3 = SPI1_TX, memory -> peripheral, byte wide both sides */
     DMA2_Stream3->CR = DMA_SxCR_CHSEL_0 | DMA_SxCR_CHSEL_1 | DMA_SxCR_DIR_0 |
-                       DMA_SxCR_PSIZE_0 | DMA_SxCR_MSIZE_0 | DMA_SxCR_PL_1 |
-                       minc;
+                       DMA_SxCR_MINC | DMA_SxCR_PL_1;
     DMA2_Stream3->CR |= DMA_SxCR_EN;
 
     while (!(DMA2->LISR & DMA_LISR_TCIF3)) {
@@ -161,10 +157,23 @@ static void dma_pixels(const void *src, uint32_t count, uint32_t minc) {
     while (DMA2_Stream3->CR & DMA_SxCR_EN) {
     }
 
-    if (minc) {
-      src = (const uint16_t *)src + chunk;
-    }
+    src = (const uint8_t *)src + chunk;
     count -= chunk;
+  }
+}
+
+/** Repeat @p color for @p pixels pixels. Byte-wide DMA cannot alternate two
+ *  bytes from one address, so a short run is staged and looped. */
+static void dma_fill(uint32_t pixels, uint16_t color) {
+  uint16_t i;
+
+  for (i = 0; i < FILL_RUN; ++i) {
+    fill_run[i] = color;
+  }
+  while (pixels) {
+    uint32_t n = (pixels > FILL_RUN) ? FILL_RUN : pixels;
+    dma_bytes(fill_run, n * 2U);
+    pixels -= n;
   }
 }
 
@@ -274,9 +283,9 @@ void st7789_blit(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
 
   cs_low();
   set_window(x, y, w, h);
-  spi16_begin();
-  dma_pixels(px, (uint32_t)w * h, DMA_SxCR_MINC);
-  spi16_end();
+  spi_dma_begin();
+  dma_bytes(px, (uint32_t)w * h * 2U);
+  spi_dma_end();
   cs_high();
 }
 
@@ -286,13 +295,11 @@ void st7789_fill(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
     return;
   }
 
-  fill_word = color;
-
   cs_low();
   set_window(x, y, w, h);
-  spi16_begin();
-  dma_pixels(&fill_word, (uint32_t)w * h, 0U);
-  spi16_end();
+  spi_dma_begin();
+  dma_fill((uint32_t)w * h, color);
+  spi_dma_end();
   cs_high();
 }
 
@@ -307,13 +314,11 @@ void st7789_raw_fill(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1,
                      uint16_t color) {
   uint32_t count = (uint32_t)(x1 - x0 + 1U) * (uint32_t)(y1 - y0 + 1U);
 
-  fill_word = color;
-
   cs_low();
   set_window_raw(x0, y0, x1, y1);
-  spi16_begin();
-  dma_pixels(&fill_word, count, 0U);
-  spi16_end();
+  spi_dma_begin();
+  dma_fill(count, color);
+  spi_dma_end();
   cs_high();
 }
 

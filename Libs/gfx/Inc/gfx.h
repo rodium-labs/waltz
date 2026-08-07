@@ -36,19 +36,38 @@
 /** Rows per band. 284 * 16 * 2 = 9088 bytes of scratch. */
 #define GFX_BAND_H 16
 
-/** Pack 8:8:8 into RGB565. */
+/**
+ * Pixels are DMAed out of the band buffer byte by byte, and this core is
+ * little-endian, so the low byte of each stored halfword hits the wire first.
+ * ST7789 wants the high byte of an RGB565 pixel first, so what gets stored has
+ * to be pre-swapped - that is what this does.
+ *
+ * Set to 0 for a panel that wants the other order. Ui_ColorSweep() tries both
+ * at runtime, so there is no need to guess.
+ */
+#define GFX_WIRE_SWAP 1
+
+#if GFX_WIRE_SWAP
+/** Convert between logical RGB565 and stored wire order. Self-inverse. */
+#define GFX_WIRE(v)                                                            \
+  ((uint16_t)((((uint16_t)(v) & 0x00FFU) << 8) | ((uint16_t)(v) >> 8)))
+#else
+#define GFX_WIRE(v) ((uint16_t)(v))
+#endif
+
+/** Pack 8:8:8 into a stored pixel. */
 #define GFX_RGB(r, g, b)                                                       \
-  ((uint16_t)((((uint16_t)(r) & 0xF8U) << 8) |                                 \
-              (((uint16_t)(g) & 0xFCU) << 3) | ((uint16_t)(b) >> 3)))
+  GFX_WIRE((((uint16_t)(r) & 0xF8U) << 8) | (((uint16_t)(g) & 0xFCU) << 3) |   \
+           ((uint16_t)(b) >> 3))
 
-/** Unpack the 5/6/5 channels of a packed pixel. */
-#define GFX_GET_R(c) (((c) >> 11) & 0x1FU)
-#define GFX_GET_G(c) (((c) >> 5) & 0x3FU)
-#define GFX_GET_B(c) ((c) & 0x1FU)
+/** Unpack the 5/6/5 channels of a stored pixel. */
+#define GFX_GET_R(c) ((GFX_WIRE(c) >> 11) & 0x1FU)
+#define GFX_GET_G(c) ((GFX_WIRE(c) >> 5) & 0x3FU)
+#define GFX_GET_B(c) (GFX_WIRE(c) & 0x1FU)
 
-/** Repack from 5/6/5 channel values. */
+/** Repack from 5/6/5 channel values into a stored pixel. */
 #define GFX_PACK(r, g, b)                                                      \
-  ((uint16_t)(((uint16_t)(r) << 11) | ((uint16_t)(g) << 5) | (uint16_t)(b)))
+  GFX_WIRE(((uint16_t)(r) << 11) | ((uint16_t)(g) << 5) | (uint16_t)(b))
 
 /** Direction for gfx_tri(). */
 typedef enum { GFX_TRI_RIGHT = 0, GFX_TRI_LEFT } gfx_tri_dir_t;
