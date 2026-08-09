@@ -185,6 +185,22 @@ void Player_ToggleRepeat(void) {
   settings.repeat = player.repeat ? 1U : 0U;
 }
 
+void Player_CyclePlayMode(void) {
+  if (!player.shuffle && !player.repeat) {
+    player.shuffle = true;
+  } else if (player.shuffle && !player.repeat) {
+    player.shuffle = false;
+    player.repeat = true;
+  } else if (!player.shuffle && player.repeat) {
+    player.shuffle = true;
+  } else {
+    player.shuffle = false;
+    player.repeat = false;
+  }
+  settings.shuffle = player.shuffle ? 1U : 0U;
+  settings.repeat = player.repeat ? 1U : 0U;
+}
+
 static void advance_track(void) {
   begin_track((uint8_t)(player.index + 1U));
 

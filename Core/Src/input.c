@@ -48,6 +48,9 @@ static struct {
   uint32_t next_repeat;
 } state[BTN_COUNT];
 
+/** Set while both volume buttons are held, to mute their auto-repeat. */
+static bool chord_active;
+
 static input_event_t queue[EVENT_QUEUE];
 static uint8_t q_head;
 static uint8_t q_tail;
@@ -74,7 +77,12 @@ void Input_Init(void) {
   q_head = 0;
   q_tail = 0;
   poll_at = 0;
+  chord_active = false;
 }
+
+/** Index into `buttons` - the chord is the two volume keys. */
+#define BTN_VOL_DOWN_IDX 0U
+#define BTN_VOL_UP_IDX 4U
 
 void Input_Tick(uint32_t now) {
   uint32_t idr;
@@ -117,7 +125,10 @@ void Input_Tick(uint32_t now) {
         state[i].long_fired = true;
         push(buttons[i].on_long);
       }
-      if (buttons[i].on_repeat != INPUT_NONE &&
+      bool muted = chord_active && (i == BTN_VOL_DOWN_IDX ||
+                                    i == BTN_VOL_UP_IDX);
+
+      if (!muted && buttons[i].on_repeat != INPUT_NONE &&
           (int32_t)(now - state[i].next_repeat) >= 0) {
         push(buttons[i].on_repeat);
         state[i].next_repeat =
@@ -126,6 +137,17 @@ void Input_Tick(uint32_t now) {
     }
   }
 
+  /* Chord: both volume keys down together. Fires once per press of the pair. */
+  {
+    bool both = state[BTN_VOL_DOWN_IDX].down && state[BTN_VOL_UP_IDX].down;
+
+    if (both && !chord_active) {
+      chord_active = true;
+      push(INPUT_MODE);
+    } else if (!state[BTN_VOL_DOWN_IDX].down && !state[BTN_VOL_UP_IDX].down) {
+      chord_active = false;
+    }
+  }
 }
 
 input_event_t Input_Get(void) {

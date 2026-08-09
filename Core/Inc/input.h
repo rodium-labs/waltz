@@ -35,6 +35,15 @@ typedef enum {
   INPUT_PLAY,
   /** PLAY held - goes back. */
   INPUT_MENU,
+  /**
+   * Both volume buttons at once.
+   *
+   * Every short and long press across the five buttons is already spoken for,
+   * so cycling the play mode needs a chord. The volume pair is the safe one to
+   * overload: the first press of the pair still lands a volume step, and a
+   * stray 2 % is harmless where a stray track skip would not be.
+   */
+  INPUT_MODE,
 } input_event_t;
 
 void Input_Init(void);

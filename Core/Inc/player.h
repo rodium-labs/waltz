@@ -91,6 +91,13 @@ void Player_VolumeStep(int8_t delta);
 void Player_Select(uint8_t index);
 void Player_ToggleShuffle(void);
 void Player_ToggleRepeat(void);
+/**
+ * @brief Step through the four play modes: off, shuffle, repeat, both.
+ *
+ * One gesture instead of two toggles, which is what makes it reachable from a
+ * button chord rather than the settings page.
+ */
+void Player_CyclePlayMode(void);
 
 /** How far into a track PREV stops meaning "previous" and starts meaning
  *  "start over". */
