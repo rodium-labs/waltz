@@ -21,7 +21,12 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "input.h"
+#include "player.h"
+#include "player_ui.h"
+#include "power.h"
+#include "settings.h"
+#include "st7789.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -96,6 +101,35 @@ int main(void)
   MX_ADC1_Init();
   MX_SPI1_Init();
   MX_TIM2_Init();
+  /* USER CODE BEGIN 2 */
+  st7789_init();
+
+  /* Bring-up aid: writes straight to frame memory to locate the panel window,
+   * bypassing ST7789_X_OFFSET / ST7789_Y_OFFSET. Set to 1 if the panel ever
+   * comes up blank again. Never returns. */
+#define LCD_GRAM_PROBE 0
+#if LCD_GRAM_PROBE
+  st7789_gram_probe();
+#endif
+
+  /* Bring-up aid: identifies the panel's colour format. Never returns. */
+#define LCD_COLOR_SWEEP 0
+#if LCD_COLOR_SWEEP
+  Ui_ColorSweep();
+#endif
+
+#if UI_PANEL_CHECK
+  Ui_PanelCheck();
+#endif
+
+  /* Splash paints first, then fades the backlight up - no flash of garbage. */
+  Ui_Splash();
+
+  Settings_Load();
+  Power_Init();
+  Input_Init();
+  Player_Init();
+  Ui_Init();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -104,6 +138,12 @@ int main(void)
 
   while (1) {
     uint32_t now = HAL_GetTick();
+
+    Input_Tick(now);
+    Power_Tick(now);
+    Player_Tick(now);
+    Ui_Tick(now);
+    Settings_Autosave(now);
 
     if (now - heartbeat >= 1000U) {
       heartbeat = now;
