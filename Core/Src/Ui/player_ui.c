@@ -552,7 +552,10 @@ static void paint_transport(void *ud) {
 
 static void paint_meter(void *ud) {
   const int16_t base = ROW_METER_Y + ROW_METER_H - 4;
-  const uint16_t groove = gfx_dim(COL_CARD, 150);
+  /* Mixed from the background towards the card rather than dimmed towards
+   * black: dimming stays subtle on a dark theme but turns the groove into solid
+   * bars on a light one. */
+  const uint16_t groove = gfx_mix(COL_BG, COL_CARD, 180);
   uint8_t i;
 
   (void)ud;
