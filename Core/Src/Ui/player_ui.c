@@ -20,11 +20,17 @@
 /** Pause with the text at its start position before each loop. */
 #define MARQUEE_HOLD_MS 1400U
 
+/*
+ * Colours are deliberately *not* stored here. They used to be, and switching
+ * theme then left the marquee filling with the old background - a visible box
+ * behind the title and artist that did not match the rest of the screen. The
+ * palette is a runtime lookup now, so anything that caches a COL_* value goes
+ * stale the moment the theme changes.
+ */
 typedef struct {
   int16_t x, y, w, h;
   const gfx_font_t *font;
-  uint16_t fg;
-  uint16_t bg;
+  bool dim; /**< Draw in the secondary text colour rather than the primary. */
   char text[MARQUEE_BUF];
   int16_t text_w;
   int16_t offset;
@@ -395,17 +401,18 @@ static void paint_home(void *ud) {
 static void paint_marquee(void *ud) {
   marquee_t *m = (marquee_t *)ud;
   int16_t ty = (int16_t)(m->y + (m->h - m->font->height) / 2);
+  uint16_t fg = m->dim ? COL_TEXT_DIM : COL_TEXT;
 
-  gfx_fill(m->x, m->y, m->w, m->h, m->bg);
+  gfx_fill(m->x, m->y, m->w, m->h, COL_BG);
 
   if (!m->scrolling) {
-    gfx_text(m->x, ty, m->font, m->text, m->fg);
+    gfx_text(m->x, ty, m->font, m->text, fg);
     return;
   }
 
-  gfx_text((int16_t)(m->x - m->offset), ty, m->font, m->text, m->fg);
+  gfx_text((int16_t)(m->x - m->offset), ty, m->font, m->text, fg);
   gfx_text((int16_t)(m->x - m->offset + m->text_w + MARQUEE_GAP), ty, m->font,
-           m->text, m->fg);
+           m->text, fg);
 }
 
 static void marquee_set(marquee_t *m, const char *text, uint32_t now) {
@@ -1223,16 +1230,14 @@ void Ui_Init(void) {
   title_mq.w = MID_W;
   title_mq.h = ROW_TITLE_H;
   title_mq.font = &Font_Roboto16;
-  title_mq.fg = COL_TEXT;
-  title_mq.bg = COL_BG;
+  title_mq.dim = false;
 
   artist_mq.x = MID_X;
   artist_mq.y = ROW_ARTIST_Y;
   artist_mq.w = MID_W;
   artist_mq.h = ROW_ARTIST_H;
   artist_mq.font = &Font_Mono6x8;
-  artist_mq.fg = COL_TEXT_DIM;
-  artist_mq.bg = COL_BG;
+  artist_mq.dim = true;
 
   load_track_text(now);
   latch();
