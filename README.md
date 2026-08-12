@@ -394,3 +394,15 @@ that would silently corrupt the display.
   alongside the transport row.
 * Real playback timing. `DEMO_TIME_SCALE` runs the transport 4x while there is
   nothing to actually decode; set it to 1 for wall-clock.
+
+## License
+
+MIT - see [LICENSE](LICENSE).
+
+Third-party code keeps its own terms:
+
+* `Drivers/` - ST's CMSIS headers and the STM32F4xx HAL, BSD-3-Clause, with
+  ST's own `LICENSE.txt` files kept alongside them.
+* `Libs/gfx/Src/gfx_fonts.c` - bitmap tables from
+  [afiskon/stm32-ssd1306](https://github.com/afiskon/stm32-ssd1306), MIT.
+* `Font_Roboto16` in the same file - Roboto Thin by Google, Apache License 2.0.
