@@ -958,16 +958,28 @@ static void paint_splash(void *ud) {
 }
 
 void Ui_Splash(void) {
-  uint8_t b;
+  uint8_t target;
+  uint8_t step;
+  uint16_t b;
+
+  /* The stored theme has to be live before anything is drawn, or the splash
+   * comes up in the defaults and then the first screen snaps to the real
+   * palette. */
+  Theme_Set(settings.theme);
 
   gfx_flush(0, 0, GFX_W, GFX_H, paint_splash, NULL);
 
-  /* Ui_Init() has not run yet, so this one fades inline. */
-  for (b = 0; b <= 100U; b = (uint8_t)(b + 4U)) {
-    st7789_backlight(b);
-    HAL_Delay(8);
+  /* Ui_Tick() is not running yet, so this ramp is inline - but it uses the same
+   * step the FADE setting picks, so the splash comes up at whatever speed the
+   * rest of the UI fades at. */
+  target = brightness_steps[settings.brightness];
+  step = fade_steps[settings.fade];
+
+  for (b = 0; b < target; b = (uint16_t)(b + step)) {
+    st7789_backlight((uint8_t)b);
+    HAL_Delay(10);
   }
-  st7789_backlight(100);
+  st7789_backlight(target);
   HAL_Delay(1400);
 }
 

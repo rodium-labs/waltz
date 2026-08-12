@@ -104,6 +104,10 @@ int main(void)
   /* USER CODE BEGIN 2 */
   st7789_init();
 
+  /* Load before the splash so it comes up in the stored theme, at the stored
+   * brightness, rather than flashing the defaults first. */
+  Settings_Load();
+
   /* Bring-up aid: writes straight to frame memory to locate the panel window,
    * bypassing ST7789_X_OFFSET / ST7789_Y_OFFSET. Set to 1 if the panel ever
    * comes up blank again. Never returns. */
@@ -125,7 +129,6 @@ int main(void)
   /* Splash paints first, then fades the backlight up - no flash of garbage. */
   Ui_Splash();
 
-  Settings_Load();
   Power_Init();
   Input_Init();
   Player_Init();
