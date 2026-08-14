@@ -45,8 +45,25 @@
  * started - which is exactly the tear that survived the first vsync attempt.
  * Splitting by column instead means each band is a slice of the scan's path,
  * and the write walks the same way the beam does, staying in front of it.
+ *
+ * Thirty-two rather than sixty-four for two reasons, both measured. It halves
+ * the pair of buffers from 19 kB to 9.7 kB, which is what lets an MP3 decoder
+ * fit at all - Helix plus a PCM double buffer plus FatFs came out about 2 kB
+ * over the top at 64. And it is *faster*: a narrower band means a shorter
+ * transfer to hide the drawing behind, so less of the last one is left over.
+ * That was not true before gradient rows were cached and primitives learned to
+ * skip a band they cannot reach; at that point more bands meant redrawing the
+ * screen more times, and 32 measured 17 ms against 64's 13.
+ *
+ * More bands also buys deadline, which is the opposite of the obvious. The write
+ * does not have to finish before the scan has crossed the strip - it has to stay
+ * ahead of it band by band, so with N bands the frame has until
+ * porch + crossing * (N-1)/N. Nine bands allow 15.3 ms where five allow 14.1,
+ * and a screen transition - two screens in flight at once - needs about 15.
+ * Six bands is the one width that fails: 14.6 ms against a 14.5 ms deadline,
+ * and it tore.
  */
-#define GFX_BAND_W 64
+#define GFX_BAND_W 32
 
 /**
  * Pixels are DMAed out of the band buffer byte by byte, and this core is
