@@ -16,7 +16,7 @@ static uint32_t sim_tick;
 
 /* Scripted button presses, so the preview covers both screens. input.c is not
  * compiled here - it reads GPIOA - so these stubs stand in for it. */
-static input_event_t scripted[64];
+static input_event_t scripted[1024];
 static int script_head, script_tail;
 
 void Input_Init(void) { script_head = script_tail = 0; }
@@ -29,7 +29,13 @@ input_event_t Input_Get(void) {
   return scripted[script_tail++];
 }
 
-static void press(input_event_t e) { scripted[script_head++] = e; }
+static void press(input_event_t e) {
+  if (script_head == (int)(sizeof scripted / sizeof scripted[0])) {
+    fprintf(stderr, "SCRIPT QUEUE FULL\n");
+    exit(1);
+  }
+  scripted[script_head++] = e;
+}
 
 uint32_t HAL_GetTick(void) { return sim_tick; }
 void HAL_Delay(uint32_t ms) { sim_tick += ms; }
@@ -114,12 +120,18 @@ static void run_for(uint32_t ms) {
   }
 }
 
-/** Dump a frame every @p step_ms, so an animation reads as a filmstrip. */
-static void film(const char *outdir, const char *name, int frames,
-                 int step_ms) {
+/**
+ * Dump a frame every @p step_ms so an animation reads as a filmstrip, tapping
+ * @p key every @p every frames. Pass INPUT_NONE to just roll the camera.
+ */
+static void film_keys(const char *outdir, const char *name, int frames,
+                      int step_ms, input_event_t key, int every) {
   char path[512];
 
   for (int i = 0; i < frames; ++i) {
+    if (key != INPUT_NONE && (i % every) == 0) {
+      press(key);
+    }
     for (int k = 0; k < step_ms; k += 5) {
       Player_Tick(sim_tick);
       Ui_Tick(sim_tick);
@@ -127,6 +139,33 @@ static void film(const char *outdir, const char *name, int frames,
     }
     snprintf(path, sizeof path, "%s/%s-%02d.ppm", outdir, name, i);
     dump(path);
+  }
+}
+
+static void film(const char *outdir, const char *name, int frames,
+                 int step_ms) {
+  film_keys(outdir, name, frames, step_ms, INPUT_NONE, 1);
+}
+
+/* The home strip wraps, so counting presses is the only way to know which tile
+ * is lit. Every home-level move goes through home_pick() to keep that honest -
+ * guessing is what silently sent whole scenes to the wrong screen. */
+enum { TILE_MUSIC, TILE_TRACKS, TILE_STATS, TILE_SETTINGS };
+static int home_tile;
+
+/** Step the focus one tile right, in step with the UI. */
+static void home_next(void) {
+  press(INPUT_NEXT);
+  home_tile = (home_tile + 1) % HOME_TILES;
+  run_for(220);
+}
+
+/** Back out to home from wherever we are, then light tile @p want. */
+static void home_pick(int want) {
+  press(INPUT_MENU); /* a no-op once we are already home */
+  run_for(400);
+  while (home_tile != want) {
+    home_next();
   }
 }
 
@@ -160,15 +199,13 @@ int main(int argc, char **argv) {
   SHOT("home");
 
   /* home: walk the tiles */
-  press(INPUT_NEXT);
-  run_for(100);
+  home_pick(TILE_TRACKS);
   SHOT("home-list");
-  press(INPUT_NEXT);
-  run_for(100);
+  home_pick(TILE_SETTINGS);
   SHOT("home-settings");
 
   /* into the list, pick a track */
-  press(INPUT_PREV);
+  home_pick(TILE_TRACKS);
   press(INPUT_PLAY);
   run_for(200);
   SHOT("list");
@@ -186,28 +223,22 @@ int main(int argc, char **argv) {
 
   /*
    * Every theme, on the player screen - the stale-marquee-colour bug lived
-   * there. The home tile is on TRACKS at this point, so MENU, PLAY, PLAY walks
-   * home -> list -> player deterministically without guessing at selections.
+   * there. Going out to MUSIC and back in keeps the track and the elapsed time,
+   * so only the palette changes between shots.
    */
   for (int t = 0; t < 10; ++t) {
     Theme_Set((uint8_t)t);
-    press(INPUT_MENU);
-    run_for(80);
-    press(INPUT_PLAY);
-    run_for(80);
+    home_pick(TILE_MUSIC);
     press(INPUT_PLAY);
     run_for(600);
     snprintf(path, sizeof path, "%s/T%02d-theme.ppm", outdir, t);
     dump(path);
   }
   Theme_Set(0);
-  press(INPUT_MENU);
-  run_for(200);
 
   /* icon reference: on the player, both mode flags lit, for zoom.py */
-  press(INPUT_PLAY); /* home -> list */
-  run_for(120);
-  press(INPUT_PLAY); /* list -> player */
+  home_pick(TILE_MUSIC);
+  press(INPUT_PLAY);
   run_for(500);
   press(INPUT_MODE);
   press(INPUT_MODE);
@@ -219,46 +250,50 @@ int main(int argc, char **argv) {
   run_for(200);
 
   /* filmstrip: home tile focus sliding across */
+  home_pick(TILE_MUSIC);
   press(INPUT_NEXT);
-  film(outdir, "F1focus", 6, 30);
-  press(INPUT_PREV);
+  home_tile = (home_tile + 1) % HOME_TILES;
+  film(outdir, "F1focus", 12, 20);
   run_for(400);
 
   /* filmstrip: pushing into a screen */
-  press(INPUT_NEXT);
-  run_for(300);
+  home_pick(TILE_TRACKS);
   press(INPUT_PLAY);
-  film(outdir, "F2push", 9, 30);
+  film(outdir, "F2push", 16, 20);
   run_for(400);
 
-  /* filmstrip: the highlight sliding down a row */
-  press(INPUT_NEXT);
-  film(outdir, "F3row", 6, 30);
+  /* filmstrip: the highlight walking down the list. A move every 10 frames is
+   * 200 ms, so the 160 ms slide lands and rests before the next one. */
+  film_keys(outdir, "F3row", 30, 20, INPUT_NEXT, 10);
   run_for(300);
 
   /* filmstrip: popping back out to home */
   press(INPUT_MENU);
-  film(outdir, "F4pop", 9, 30);
+  film(outdir, "F4pop", 16, 20);
   run_for(400);
 
   /* home -> stats */
-  press(INPUT_MENU);
-  run_for(100);
-  press(INPUT_NEXT); /* TRACKS -> STATS */
-  run_for(100);
+  home_pick(TILE_STATS);
   SHOT("home-stats");
   press(INPUT_PLAY);
   run_for(200);
   SHOT("stats");
 
   /* stats -> home -> settings */
-  press(INPUT_MENU);
-  run_for(100);
-  press(INPUT_NEXT); /* STATS -> SETTINGS */
-  run_for(100);
+  home_pick(TILE_SETTINGS);
   press(INPUT_PLAY);
   run_for(200);
   SHOT("settings");
+
+  /* filmstrip: walking the settings rows, which wrap at the bottom */
+  film_keys(outdir, "F5menu", 48, 20, INPUT_NEXT, 12);
+  run_for(300);
+
+  /* back to the top row so the FADE walk below still lands where it says */
+  for (int i = 0; i < 8; ++i) {
+    press(INPUT_PREV);
+  }
+  run_for(400);
 
   /* down to the FADE row and cycle it */
   press(INPUT_NEXT);
