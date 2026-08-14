@@ -23,6 +23,68 @@ static int16_t clip_x1 = CLIP_OPEN, clip_y1 = CLIP_OPEN;
 static inline int16_t min16(int16_t a, int16_t b) { return a < b ? a : b; }
 static inline int16_t max16(int16_t a, int16_t b) { return a > b ? a : b; }
 
+/*
+ * Ordered dithering for the gradients.
+ *
+ * RGB565 gives 32 levels of red and blue, so a gradient spanning the panel
+ * steps every few rows and the banding is plainly visible - especially now that
+ * the whole background is one. Perturbing each pixel by a 4x4 threshold before
+ * quantising trades that for a fine stipple the eye integrates away, and costs
+ * a handful of cycles per pixel.
+ */
+static const uint8_t bayer4[16] = {0U, 8U,  2U, 10U, 12U, 4U, 14U, 6U,
+                                   3U, 11U, 1U, 9U,  15U, 7U, 13U, 5U};
+
+static inline uint8_t quant(int16_t v, int16_t bias, uint8_t levels) {
+  int16_t t = (int16_t)(v + bias);
+
+  if (t < 0) {
+    t = 0;
+  } else if (t > 255) {
+    t = 255;
+  }
+  return (uint8_t)(((int32_t)t * levels + 127) / 255);
+}
+
+/** Write one row of a gradient, dithering the 8-bit channels down to 5/6/5. */
+static void span_dither(int16_t x, int16_t y, int16_t w, int16_t r8,
+                        int16_t g8, int16_t b8) {
+  int16_t x0 = max16(max16(x, band_x), clip_x0);
+  int16_t x1 = min16(min16((int16_t)(x + w), (int16_t)(band_x + band_w)), clip_x1);
+  int16_t xx;
+
+  if (y < band_y || y >= band_y + band_h || y < clip_y0 || y >= clip_y1) {
+    return;
+  }
+  for (xx = x0; xx < x1; ++xx) {
+    int16_t d = (int16_t)bayer4[((y & 3) << 2) | (xx & 3)];
+    uint8_t r = quant(r8, (int16_t)((d - 8) / 2), 31U);
+    uint8_t g = quant(g8, (int16_t)((d - 8) / 4), 63U);
+    uint8_t b = quant(b8, (int16_t)((d - 8) / 2), 31U);
+
+    band[(y - band_y) * band_w + (xx - band_x)] = GFX_PACK(r, g, b);
+  }
+}
+
+/** Channel values of a packed pixel, widened back to 8 bits. */
+static void unpack8(uint16_t c, int16_t *r, int16_t *g, int16_t *b) {
+  *r = (int16_t)((GFX_GET_R(c) * 255U) / 31U);
+  *g = (int16_t)((GFX_GET_G(c) * 255U) / 63U);
+  *b = (int16_t)((GFX_GET_B(c) * 255U) / 31U);
+}
+
+/** Interpolate the 8-bit channels of two packed pixels. */
+static void blend8(uint16_t a, uint16_t b, uint8_t t, int16_t *r, int16_t *g,
+                   int16_t *bl) {
+  int16_t ar, ag, ab, br, bg, bb;
+
+  unpack8(a, &ar, &ag, &ab);
+  unpack8(b, &br, &bg, &bb);
+  *r = (int16_t)(ar + (((int32_t)(br - ar) * t) / 255));
+  *g = (int16_t)(ag + (((int32_t)(bg - ag) * t) / 255));
+  *bl = (int16_t)(ab + (((int32_t)(bb - ab) * t) / 255));
+}
+
 /** Integer square root, enough range for the radii used here. */
 static int16_t isqrt(int32_t v) {
   int32_t r = 0;
@@ -177,7 +239,10 @@ void gfx_vgrad(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t top,
   }
   for (yy = y0; yy < y1; ++yy) {
     uint8_t t = (uint8_t)(((int32_t)(yy - y) * 255) / (h - 1));
-    gfx_fill(x, yy, w, 1, gfx_mix(top, bottom, t));
+    int16_t r, g, b;
+
+    blend8(top, bottom, t, &r, &g, &b);
+    span_dither(x, yy, w, r, g, b);
   }
 }
 
@@ -215,11 +280,17 @@ void gfx_rrect_grad(int16_t x, int16_t y, int16_t w, int16_t h, int16_t r,
   }
   for (yy = y0; yy < y1; ++yy) {
     int16_t inset = rrect_inset(yy, y, h, r);
-    uint16_t c = top;
+
     if (h > 1 && top != bottom) {
-      c = gfx_mix(top, bottom, (uint8_t)(((int32_t)(yy - y) * 255) / (h - 1)));
+      uint8_t t = (uint8_t)(((int32_t)(yy - y) * 255) / (h - 1));
+      int16_t cr, cg, cb;
+
+      blend8(top, bottom, t, &cr, &cg, &cb);
+      span_dither((int16_t)(x + inset), yy, (int16_t)(w - 2 * inset), cr, cg,
+                  cb);
+    } else {
+      gfx_fill((int16_t)(x + inset), yy, (int16_t)(w - 2 * inset), 1, top);
     }
-    gfx_fill((int16_t)(x + inset), yy, (int16_t)(w - 2 * inset), 1, c);
   }
 }
 
