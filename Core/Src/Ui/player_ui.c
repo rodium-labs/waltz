@@ -52,6 +52,16 @@ typedef struct {
 #define D_TRANSPORT (1U << 7)
 #define D_ALL 0x00FFU
 
+/*
+ * Set to 0 to repaint whole pages while something is animating. The narrowed
+ * path is a big win - a menu frame costs about a third - but it is the kind of
+ * optimisation that fails by leaving pixels behind rather than by crashing, so
+ * it stays switchable and the simulator renders both and compares.
+ */
+#ifndef UI_NARROW_REPAINT
+#define UI_NARROW_REPAINT 1
+#endif
+
 /** Level meter refresh interval - it animates on its own. */
 #define UI_METER_MS 50U
 
@@ -180,6 +190,20 @@ static struct {
 
 /** Sliding highlight on the menus and sliding focus ring on the home screen. */
 static int16_t sel_y_from, sel_y_to;
+
+/*
+ * Narrowing a repaint to the rows the highlight touches needs to know where the
+ * highlight actually is, not where the move says it started. A press can arrive
+ * before the last move finished, and menu_move() sets sel_y_from to the settled
+ * row rather than to wherever the pill had got to - so the band has to cover
+ * where it was last put down as well as where it is going. Leaving that out is
+ * what left rows of pill edge stranded across the panel.
+ *
+ * -1 means nothing is known and the next repaint has to be the whole page.
+ */
+static int16_t pill_shown_y = -1;
+/** Set when a move scrolled the list: every row shifts, so nothing can narrow. */
+static bool menu_scrolled;
 static int16_t focus_x_from, focus_x_to;
 static uint32_t move_start;
 /** Repaint the content area until this tick - covers the two above. */
@@ -1159,6 +1183,7 @@ static void menu_move(int8_t delta) {
    * well reads as two things moving at once. Snap instead. */
   if (*active_top() != top_before) {
     sel_y_from = sel_y_to;
+    menu_scrolled = true;
   }
   move_start = HAL_GetTick();
   page_anim_until = move_start + ANIM_SELECT_MS;
@@ -1526,6 +1551,10 @@ static void load_track_text(uint32_t now) {
 
 static void go(ui_screen_t next) {
   ui_screen_t prev = screen;
+
+  /* Nothing is known about the new screen's highlight yet. */
+  pill_shown_y = -1;
+  menu_scrolled = false;
 
   screen = next;
   bar_dirty = true;
@@ -1926,6 +1955,7 @@ void Ui_ShowMessage(const char *title, const char *detail) {
 }
 
 void Ui_Tick(uint32_t now) {
+  bool animating;
   bool whole = false;
   uint16_t dirty;
 
@@ -2008,7 +2038,8 @@ void Ui_Tick(uint32_t now) {
   }
 
   /* A selection or focus move is mid-flight; keep the page coming. */
-  if ((int32_t)(now - page_anim_until) < 0) {
+  animating = ((int32_t)(now - page_anim_until) < 0);
+  if (animating) {
     page_dirty = true;
   }
 
@@ -2024,11 +2055,21 @@ void Ui_Tick(uint32_t now) {
 
   if (screen == UI_HOME) {
     if (page_dirty) {
+      int16_t y = CONTENT_Y;
+      int16_t h = CONTENT_H;
       uint32_t t0;
 
+#if UI_NARROW_REPAINT
+      /* The focus ring travels along the tile row and never leaves it, so this
+       * one holds whatever the animation is doing - no memory needed. */
+      if (animating) {
+        y = HOME_TILE_Y;
+        h = HOME_TILE_H;
+      }
+#endif
       timed_inner = paint_home;
       t0 = frame_begin();
-      gfx_flush(0, CONTENT_Y, GFX_W, CONTENT_H, paint_timed, NULL);
+      gfx_flush(0, y, GFX_W, h, paint_timed, NULL);
       frame_end(t0);
       page_dirty = false;
     }
@@ -2037,24 +2078,79 @@ void Ui_Tick(uint32_t now) {
   }
 
   if (screen != UI_NOW) {
+    /* Anything that changes a row rather than the highlight means the page has
+     * to go down whole, so it is tracked apart from page_dirty. */
+    bool elsewhere = false;
+
     /* The transport keeps running underneath, so the playing-track highlight
      * has to follow it even while nobody is pressing anything. */
     if (shown.index != player.index) {
       page_dirty = true;
+      elsewhere = true;
     }
     /* Stats tick over on their own, so repaint on the meter cadence. */
     if (screen == UI_STATS && now - meter_at >= UI_METER_MS * 10U) {
       meter_at = now;
       page_dirty = true;
+      elsewhere = true;
     }
     if (page_dirty) {
+      int16_t y = CONTENT_Y;
+      int16_t h = CONTENT_H;
+      int16_t hy = menu_pill_y(HAL_GetTick());
       uint32_t t0;
+
+#if UI_NARROW_REPAINT
+      /*
+       * Only a couple of rows change while the highlight moves, so the band is
+       * their union rather than the whole page. Three things have to be in it,
+       * and leaving any one out strands pixels:
+       *
+       *   - where the pill was last drawn. A press can interrupt a move in
+       *     flight, and menu_move() sets sel_y_from to the settled row rather
+       *     than to wherever the pill had got to.
+       *   - where the pill is now.
+       *   - both rows involved. Their text changes weight the instant the
+       *     selection does, which is well before the pill arrives - that one
+       *     cost a round of stranded text, found by rendering the same scene
+       *     with this narrowing off and diffing every frame.
+       *
+       * The two pixel margin covers the tick between working this out and
+       * paint_menu asking the clock again.
+       */
+      if (animating && !elsewhere && !menu_scrolled && pill_shown_y >= 0) {
+        int16_t lo = pill_shown_y;
+        int16_t hi = pill_shown_y;
+        int16_t k;
+
+        for (k = 0; k < 3; ++k) {
+          int16_t v = (k == 0) ? hy : ((k == 1) ? sel_y_from : sel_y_to);
+
+          if (v < lo) {
+            lo = v;
+          }
+          if (v > hi) {
+            hi = v;
+          }
+        }
+
+        y = (int16_t)(lo - 2);
+        h = (int16_t)(hi - lo + MENU_ROW_H + 4);
+        if (y < CONTENT_Y) {
+          y = CONTENT_Y;
+        }
+        if (y + h > GFX_H) {
+          h = (int16_t)(GFX_H - y);
+        }
+      }
+#endif
+      menu_scrolled = false;
 
       timed_inner = paint_menu;
       t0 = frame_begin();
-      gfx_flush(0, CONTENT_Y, GFX_W, CONTENT_H, paint_timed,
-                (void *)active_menu());
+      gfx_flush(0, y, GFX_W, h, paint_timed, (void *)active_menu());
       frame_end(t0);
+      pill_shown_y = hy;
       page_dirty = false;
     }
     latch();
