@@ -27,4 +27,9 @@ python3 "$here/sheet.py" "$out"/0[789]*.ppm "$out"/1*.ppm "$root/docs/ui-screens
 python3 "$here/sheet.py" "$out"/T0[0-4]*.ppm "$root/docs/ui-themes-a.png"
 python3 "$here/sheet.py" "$out"/T0[5-9]*.ppm "$root/docs/ui-themes-b.png"
 python3 "$here/sheet.py" "$out"/S0*.ppm "$root/docs/ui-splash.png"
+python3 "$here/zoom.py" "$out/ICONS.ppm" "$root/docs/icons.png" 8 \
+  0,0,284,12 196,12,84,26
+for f in F1focus F2push F3row F4pop; do
+  python3 "$here/sheet.py" "$out"/$f-*.ppm "$root/docs/anim-$f.png"
+done
 rm -rf "$out"

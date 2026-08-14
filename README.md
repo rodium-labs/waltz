@@ -197,6 +197,31 @@ player below it fits in 64 rows.
 Every list wraps - past the last row is the first one again, in the menus and
 across the home tiles.
 
+## Motion
+
+![Push](docs/anim-F2push.png)
+
+*Pushing into a screen, sampled every 30 ms.*
+
+Transitions carry the hierarchy: going into something pushes it in from the
+right, coming back slides it away again. Selection does not jump either - the
+home focus ring and the menu highlight slide to their new place.
+
+Animation is time-based rather than frame-based, so a slow frame shortens the
+animation instead of stretching it. Ease-out cubic over 240 ms for screens,
+160 ms for selection.
+
+None of it needs a framebuffer. `gfx_translate()` shifts the coordinate origin
+the primitives draw against, so a transition paints the outgoing screen at one
+offset and the incoming one at another inside a single banded flush, and neither
+screen's paint function knows it is being moved.
+
+The one thing that had to change to make that safe was clipping. It used to fall
+out of the band for free, which held while every paint function owned exactly
+the region it was flushed with - and broke the moment the marquee was reused
+inside a whole-screen repaint, where it happily drew its text across the album
+art. `gfx_clip()` makes it explicit.
+
 ## Controls
 
 PLAY is the only button with a long press, and it always means the same two

@@ -114,6 +114,22 @@ static void run_for(uint32_t ms) {
   }
 }
 
+/** Dump a frame every @p step_ms, so an animation reads as a filmstrip. */
+static void film(const char *outdir, const char *name, int frames,
+                 int step_ms) {
+  char path[512];
+
+  for (int i = 0; i < frames; ++i) {
+    for (int k = 0; k < step_ms; k += 5) {
+      Player_Tick(sim_tick);
+      Ui_Tick(sim_tick);
+      sim_tick += 5;
+    }
+    snprintf(path, sizeof path, "%s/%s-%02d.ppm", outdir, name, i);
+    dump(path);
+  }
+}
+
 int main(int argc, char **argv) {
   const char *outdir = (argc > 1) ? argv[1] : ".";
   char path[512];
@@ -187,6 +203,43 @@ int main(int argc, char **argv) {
   Theme_Set(0);
   press(INPUT_MENU);
   run_for(200);
+
+  /* icon reference: on the player, both mode flags lit, for zoom.py */
+  press(INPUT_PLAY); /* home -> list */
+  run_for(120);
+  press(INPUT_PLAY); /* list -> player */
+  run_for(500);
+  press(INPUT_MODE);
+  press(INPUT_MODE);
+  press(INPUT_MODE);
+  run_for(400);
+  snprintf(path, sizeof path, "%s/ICONS.ppm", outdir);
+  dump(path);
+  press(INPUT_MODE);
+  run_for(200);
+
+  /* filmstrip: home tile focus sliding across */
+  press(INPUT_NEXT);
+  film(outdir, "F1focus", 6, 30);
+  press(INPUT_PREV);
+  run_for(400);
+
+  /* filmstrip: pushing into a screen */
+  press(INPUT_NEXT);
+  run_for(300);
+  press(INPUT_PLAY);
+  film(outdir, "F2push", 9, 30);
+  run_for(400);
+
+  /* filmstrip: the highlight sliding down a row */
+  press(INPUT_NEXT);
+  film(outdir, "F3row", 6, 30);
+  run_for(300);
+
+  /* filmstrip: popping back out to home */
+  press(INPUT_MENU);
+  film(outdir, "F4pop", 9, 30);
+  run_for(400);
 
   /* home -> stats */
   press(INPUT_MENU);
