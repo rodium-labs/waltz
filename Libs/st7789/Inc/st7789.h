@@ -51,6 +51,22 @@
  * measured with Ui_ColorSweep(), which came out clean on plain RGB565 with no
  * swap and no inversion once the pixel path stopped mangling bytes.
  */
+/*
+ * Where the visible strip sits on the axis the panel actually scans.
+ *
+ * The controller sweeps its 320 gate lines whatever MADCTL says, so in
+ * landscape it is the 284 px dimension that gets scanned - the tear line runs
+ * vertically and travels sideways. GSCAN reports the line being displayed, and
+ * these two bounds are what a write has to stay clear of to start clean.
+ */
+#if (ST7789_ROTATION & 1)
+#define ST7789_SCAN_FIRST ST7789_X_OFFSET
+#define ST7789_SCAN_LAST (ST7789_X_OFFSET + ST7789_W - 1)
+#else
+#define ST7789_SCAN_FIRST ST7789_Y_OFFSET
+#define ST7789_SCAN_LAST (ST7789_Y_OFFSET + ST7789_H - 1)
+#endif
+
 #define ST7789_BGR 0
 
 /**
@@ -130,5 +146,39 @@ void st7789_raw_fill(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1,
  * With the offsets in this header correct, stages 2 and 3 both come out green.
  */
 void st7789_gram_probe(void);
+
+/**
+ * @brief Ask the controller which line it is displaying.
+ *
+ * Needs the module to answer on SDA - see rd_cmd() in st7789.c. Returns a line
+ * number, or nonsense if reads are not possible on this board, which is what
+ * st7789_read_probe() is for.
+ */
+uint16_t st7789_scanline(void);
+
+/**
+ * @brief Settle whether this module can be read back at all.
+ *
+ * Leaves the panel ID and a run of timestamped scanline samples in RAM for the
+ * debugger. A believable ID plus a counter that climbs and wraps means vsync is
+ * available without a TE pin.
+ */
+void st7789_read_probe(void);
+
+/**
+ * @brief Block until the panel is not scanning the visible strip.
+ *
+ * Returns during the porch, which is the only moment a full-screen write can
+ * start and still finish every column before the scan reaches it. Needs reads
+ * to work on this module; without them it returns immediately and the display
+ * tears as before.
+ */
+void st7789_wait_vblank(void);
+
+/** How long the last wait blocked, in microseconds. Zero if it did not. */
+extern volatile uint32_t st7789_vsync_last_us;
+
+/** Measure the panel's line period. Called by st7789_init(). */
+void st7789_sync_calibrate(void);
 
 #endif /* __ST7789_H__ */

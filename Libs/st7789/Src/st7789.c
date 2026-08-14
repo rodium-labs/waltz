@@ -104,6 +104,206 @@ static void wr_cmd_args(uint8_t cmd, const uint8_t *args, uint16_t len) {
   cs_high();
 }
 
+/* Read path --------------------------------------------------------------- */
+
+/*
+ * Reading the controller back, on a module with no SDO pad.
+ *
+ * PA6 is SPI1_MISO on paper but a button in practice, and this panel breaks out
+ * eight pins, none of them a data output. The way round it is half duplex:
+ * BIDIMODE with BIDIOE cleared turns MOSI itself into an input while the
+ * peripheral keeps driving SCL, so the controller answers on the same wire the
+ * commands went out on. Reads also want a far slower clock than writes - the
+ * controller is driving the line from its own logic, not a shift register
+ * clocked by us - so the prescaler drops for the transaction and goes back
+ * afterwards.
+ *
+ * Whether it answers at all depends on the module: a series buffer on SDA would
+ * make it write-only in hardware. st7789_read_probe() is what settles that.
+ */
+static void rd_cmd(uint8_t cmd, uint8_t *out, uint16_t len) {
+  uint32_t dir = hspi1.Init.Direction;
+  uint32_t baud = hspi1.Init.BaudRatePrescaler;
+
+  hspi1.Init.Direction = SPI_DIRECTION_1LINE;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_32; /* 84/32 = 2.6 MHz */
+  (void)HAL_SPI_Init(&hspi1);
+
+  cs_low();
+  dc_command();
+  (void)HAL_SPI_Transmit(&hspi1, &cmd, 1, 100);
+  dc_data();
+  (void)HAL_SPI_Receive(&hspi1, out, len, 100);
+  cs_high();
+
+  hspi1.Init.Direction = dir;
+  hspi1.Init.BaudRatePrescaler = baud;
+  (void)HAL_SPI_Init(&hspi1);
+}
+
+/*
+ * Probe results, left in RAM because there is no console on this board:
+ *
+ *   STM32_Programmer_CLI -c port=SWD mode=HOTPLUG -r32 <&st7789_probe> 128
+ */
+volatile uint8_t st7789_probe_id[4];
+volatile uint16_t st7789_probe_scan[24];
+volatile uint32_t st7789_probe_at_us[24];
+volatile uint8_t st7789_probe_done;
+
+/** Current display scanline, or 0xFFFF if the panel will not answer. */
+uint16_t st7789_scanline(void) {
+  uint8_t rx[3] = {0U, 0U, 0U};
+
+  /* GSCAN returns a dummy byte then a 9 bit line counter. */
+  rd_cmd(0x45U, rx, 3U);
+  return (uint16_t)(((uint16_t)(rx[1] & 0x01U) << 8) | rx[2]);
+}
+
+/* Panel line period, in CPU cycles. Calibrated at init; the default is the
+ * value measured on this module, used if calibration cannot get a clean read. */
+static uint32_t scan_line_cycles = 4098U;
+
+/** How many usable pairs the calibration got, for the debugger. */
+#define SYNC_FITS 8U
+volatile uint8_t st7789_sync_fits;
+
+/** True while the panel is painting the part of the glass we draw on. */
+static bool scan_inside(uint16_t line) {
+  return (line >= ST7789_SCAN_FIRST) && (line <= ST7789_SCAN_LAST);
+}
+
+void st7789_sync_calibrate(void) {
+  uint32_t rate[SYNC_FITS];
+  uint16_t prev;
+  uint32_t prev_t;
+  uint8_t got = 0U;
+  uint8_t i;
+
+  CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+  DWT->CYCCNT = 0U;
+  DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+
+  /*
+   * Sampled rather than timed once. A single pair is only right if the counter
+   * did not wrap in between, and a wrap looks exactly like a slow panel - which
+   * is how an earlier version came back with a line period less than half the
+   * real one. Taking the median of several rising pairs throws the wraps away.
+   */
+  prev = st7789_scanline();
+  prev_t = DWT->CYCCNT;
+  for (i = 0U; i < 24U && got < SYNC_FITS; ++i) {
+    uint16_t line;
+    uint32_t t = DWT->CYCCNT;
+
+    while ((DWT->CYCCNT - t) < 84U * 2000U) {
+    }
+    line = st7789_scanline();
+    t = DWT->CYCCNT;
+
+    if (line > prev) {
+      rate[got++] = (t - prev_t) / (uint32_t)(line - prev);
+    }
+    prev = line;
+    prev_t = t;
+  }
+
+  if (got == 0U) {
+    return;
+  }
+  /* Insertion sort - eight entries at most, and only at boot. */
+  for (i = 1U; i < got; ++i) {
+    uint32_t v = rate[i];
+    uint8_t j = i;
+
+    while (j > 0U && rate[j - 1U] > v) {
+      rate[j] = rate[j - 1U];
+      --j;
+    }
+    rate[j] = v;
+  }
+  scan_line_cycles = rate[got / 2U];
+  st7789_sync_fits = got;
+}
+
+/*
+ * How the sync is behaving, for the debugger. A wait count that climbs with the
+ * frame count, and a wait that never exceeds one panel refresh, is what says
+ * this is working rather than quietly returning early.
+ */
+volatile uint32_t st7789_vsync_waits;
+volatile uint32_t st7789_vsync_last_us;
+volatile uint32_t st7789_vsync_max_us;
+volatile uint32_t st7789_vsync_line_cyc;
+
+void st7789_wait_vblank(void) {
+  uint16_t line = st7789_scanline();
+  uint32_t entered = DWT->CYCCNT;
+  uint32_t spent;
+  uint16_t guard;
+
+  st7789_vsync_line_cyc = scan_line_cycles;
+  st7789_vsync_last_us = 0U; /* zero means it was already clear */
+
+  if (!scan_inside(line)) {
+    return;
+  }
+
+  /*
+   * Sleep most of the way to the bottom of the strip rather than asking over
+   * and over - each read is a pair of SPI reconfigurations. The last two lines
+   * are polled, so a panel oscillator drifting against ours cannot land the
+   * write inside the strip.
+   */
+  if ((uint16_t)(ST7789_SCAN_LAST - line) > 2U) {
+    uint32_t t0 = DWT->CYCCNT;
+    uint32_t wait = (uint32_t)(ST7789_SCAN_LAST - line - 2U) * scan_line_cycles;
+
+    while ((DWT->CYCCNT - t0) < wait) {
+    }
+  }
+
+  for (guard = 0U; guard < 2000U; ++guard) {
+    if (scan_inside(st7789_scanline())) {
+      continue;
+    }
+    spent = (DWT->CYCCNT - entered) / 84U;
+    st7789_vsync_last_us = spent;
+    if (spent > st7789_vsync_max_us) {
+      st7789_vsync_max_us = spent;
+    }
+    st7789_vsync_waits++;
+    return;
+  }
+}
+
+void st7789_read_probe(void) {
+  uint8_t id[4] = {0U, 0U, 0U, 0U};
+  uint32_t t0;
+  uint8_t i;
+
+  CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+  DWT->CYCCNT = 0U;
+  DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+
+  /* RDDID first: a plausible ID means reads work at all, and everything else
+   * below is worth believing. */
+  rd_cmd(0x04U, id, 4U);
+  for (i = 0U; i < 4U; ++i) {
+    st7789_probe_id[i] = id[i];
+  }
+
+  /* Then the scanline, sampled fast enough to catch it moving. One frame at
+   * 60 Hz is 16.7 ms, so 24 samples 1 ms apart cross a frame boundary. */
+  t0 = DWT->CYCCNT;
+  for (i = 0U; i < 24U; ++i) {
+    st7789_probe_scan[i] = st7789_scanline();
+    st7789_probe_at_us[i] = (DWT->CYCCNT - t0) / 84U;
+    HAL_Delay(1);
+  }
+  st7789_probe_done = 1U;
+}
+
 /* Pixel path -------------------------------------------------------------- */
 
 /**

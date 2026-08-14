@@ -111,6 +111,16 @@ int main(void)
   /* Bring-up aid: writes straight to frame memory to locate the panel window,
    * bypassing ST7789_X_OFFSET / ST7789_Y_OFFSET. Set to 1 if the panel ever
    * comes up blank again. Never returns. */
+/*
+ * Set to 1 to find out whether this module answers a read on SDA. Leaves the
+ * panel ID and a run of scanline samples in RAM; a counter that climbs and
+ * wraps means vsync is available even with no TE pin broken out.
+ */
+#define LCD_READ_PROBE 0
+#if LCD_READ_PROBE
+  st7789_read_probe();
+#endif
+
 #define LCD_GRAM_PROBE 0
 #if LCD_GRAM_PROBE
   st7789_gram_probe();
