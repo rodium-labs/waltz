@@ -1843,6 +1843,7 @@ void Ui_ShowMessage(const char *title, const char *detail) {
 }
 
 void Ui_Tick(uint32_t now) {
+  bool whole = false;
   uint16_t dirty;
 
   handle_input(now);
@@ -1981,12 +1982,20 @@ void Ui_Tick(uint32_t now) {
 
   if (page_dirty) {
     dirty = D_ALL;
+    whole = true;
     page_dirty = false;
   }
 
   if (shown.index != player.index) {
-    dirty |= D_ART | D_FORMAT | D_BAR | D_TIME;
+    /*
+     * A new track moves the backdrop, because its colour comes from the cover.
+     * That is every pixel of the screen, not just the widgets carrying track
+     * data - repainting only those left each one sitting on the previous
+     * track's shade, which read as every widget having a background of its own,
+     * with the gaps between them keeping stale pixels.
+     */
     load_track_text(now);
+    whole = true;
   }
   if (shown.elapsed_s != player.elapsed_s) {
     dirty |= D_BAR | D_TIME;
@@ -2003,6 +2012,18 @@ void Ui_Tick(uint32_t now) {
     art_at = now;
     art_spin++;
     dirty |= D_ART;
+  }
+
+  if (whole) {
+    /* One pass over the whole content area, which also covers the gaps between
+     * the widgets - nothing else ever paints those. */
+    gfx_flush(0, CONTENT_Y, GFX_W, CONTENT_H, paint_player_all, NULL);
+    title_mq.dirty = false;
+    artist_mq.dirty = false;
+    marquee_tick(&title_mq, now);
+    marquee_tick(&artist_mq, now);
+    latch();
+    return;
   }
 
   if (dirty & D_ART) {
