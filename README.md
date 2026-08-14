@@ -234,7 +234,8 @@ of the value.
 
 ## Settings
 
-Theme, backlight brightness, screen-off delay, fade speed, shuffle, repeat.
+Theme, backlight brightness, screen-off delay, fade speed, shuffle, repeat, and
+an INFO row that opens an about screen rather than holding a value.
 
 **Screen off** blanks the backlight after 15 s / 30 s / 1 min / 5 min of no
 button, or never. It *fades* rather than switching - a panel that snaps to black
