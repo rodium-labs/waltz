@@ -104,7 +104,7 @@ cmake --build --preset Debug
 Needs `arm-none-eabi-gcc` from STM32CubeCLT plus `ninja` on `PATH`. Output lands
 in `build/Debug/` as `.elf`, `.hex` and `.bin`.
 
-Current footprint: **32 kB flash of 256 kB, 11 kB RAM of 64 kB** - the renderer
+Current footprint: **47 kB flash of 256 kB, 11 kB RAM of 64 kB** - the renderer
 paints in bands rather than keeping a 42 kB framebuffer, which leaves room for a
 Helix MP3 decoder later.
 
@@ -162,13 +162,15 @@ offsets in use.
 tall - so the screen is three columns rather than a stack:
 
 ```
++-------------------------------------------------------+
+| shuf rep      NOW PLAYING 3/5       vol      battery  |
 +--------+---------------------------+------------------+
-|        | title                     | clock   battery  |
+|        | title                     | prev play next   |
 | cover  | artist                    |                  |
 | 64x64  | progress                  | level meter      |
-|        | 1:23              4:05    |                  |
-|        | shuf prev play next rep   | volume           |
-+--------+---------------------------+ bitrate    3/5   |
+|        | 0:12              4:05    |                  |
+|        | 320 kbps                  |                  |
++--------+---------------------------+------------------+
 ```
 
 Each block is an independent redraw region, so only the ones whose data changed
@@ -180,7 +182,7 @@ the layout above is built for landscape and will not rearrange itself.
 
 ## Screens
 
-Boot lands on the **home screen** with nothing playing - three tiles, PREV/NEXT
+Boot lands on the **home screen** with nothing playing - four tiles, PREV/NEXT
 to pick, PLAY to enter.
 
 | Tile | |
@@ -190,6 +192,10 @@ to pick, PLAY to enter.
 | STATS | lifetime counters and supply readout |
 | SETTINGS | settings |
 
+![Menus](docs/ui-menus.png)
+
+*The three list screens: tracks, stats, settings.*
+
 A 12-row **status bar** sits above every screen: playback state, shuffle and
 repeat flags, the screen name, volume, battery. Keeping it global is why the
 player below it fits in 64 rows.
@@ -197,11 +203,45 @@ player below it fits in 64 rows.
 Every list wraps - past the last row is the first one again, in the menus and
 across the home tiles.
 
+## Surfaces
+
+Panels are frosted rather than flat: the background showing through, tinted, with
+a rim picking out the edge. The backdrop is a gradient that takes its colour from
+the current cover art, so the whole screen shifts with the track.
+
+Doing that properly normally means reading back what is behind a panel and
+blurring it, which needs a framebuffer this board cannot afford. The way around
+it is to keep the backdrop as a *formula* instead of pixels - it is linear in y,
+so `backdrop_row(y)` returns what is behind any row without anything having been
+drawn yet. A translucent layer over a linear backdrop is still linear, so a panel
+is one gradient fill of two computed endpoints. No read-back, no second buffer.
+
+```c
+static uint16_t backdrop_row(int16_t y);                     /* what is behind */
+static void glass_panel(int16_t x, int16_t y, int16_t w, int16_t h,
+                        int16_t r, uint8_t alpha, uint16_t tint);
+```
+
+Two details carry it. The rim is what sells the effect - a flat translucent
+rectangle reads as a faded box, an edge catching light reads as a pane - and only
+panes at least 16 px deep get the brighter specular line along the top, because
+on a 12 px menu row it just crowds the text above.
+
+The other is dithering. Five and six bits per channel across 76 rows is not
+enough for a smooth ramp, and the first version banded visibly. `gfx_vgrad()` and
+`gfx_rrect_grad()` now dither with an ordered 4x4 Bayer matrix, which trades the
+bands for a stipple that disappears at the panel's pixel pitch.
+
 ## Motion
 
-![Push](docs/anim-F2push.png)
+| | |
+|---|---|
+| ![Push](docs/anim-F2push.gif) | ![Pop](docs/anim-F4pop.gif) |
+| Pushing into a screen | Popping back out |
+| ![Focus](docs/anim-F1focus.gif) | ![Menu](docs/anim-F5menu.gif) |
+| The home focus ring moving | The menu highlight walking |
 
-*Pushing into a screen, sampled every 30 ms.*
+*Captured from the simulator every 20 ms, so this is the real timing.*
 
 Transitions carry the hierarchy: going into something pushes it in from the
 right, coming back slides it away again. Selection does not jump either - the
@@ -406,9 +446,23 @@ both. `Font_Roboto16` is Roboto Thin (Apache 2.0).
 ./Tools/uisim/run.sh
 ```
 
-That rewrites `docs/ui-preview.png` from the current sources. The stub also
+That rewrites every image in `docs/` from the current sources. The stub also
 aborts on any blit that falls outside the panel, so it catches layout overruns
 that would silently corrupt the display.
+
+Three scripts turn the raw frames into something reviewable, all standard
+library only:
+
+| | |
+|---|---|
+| `sheet.py` | frames -> one scaled contact sheet |
+| `zoom.py` | crops blown up 8-10x, for judging glyphs and icons |
+| `gif.py` | a frame run -> a looping GIF, median-cut palette and LZW |
+
+The scripted button presses drive the real event handler, so the scenes go
+wherever the firmware would. Home navigation goes through `home_pick()`, which
+counts presses against the tile the UI is on - the strip wraps, and scenes that
+assumed a tile index silently filmed the wrong screen for a while.
 
 ## Not done yet
 
