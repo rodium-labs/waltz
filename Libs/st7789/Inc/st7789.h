@@ -97,6 +97,19 @@ void st7789_init(void);
 void st7789_blit(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
                  const uint16_t *px);
 
+/**
+ * @brief Start a blit and return while it is still on the wire.
+ *
+ * The buffer belongs to the DMA until st7789_blit_wait() returns, so the caller
+ * needs a second one to draw into meanwhile. That overlap is what keeps the
+ * panel fed fast enough to stay ahead of its own scanout.
+ */
+void st7789_blit_start(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
+                       const uint16_t *px);
+
+/** Wait for the blit started above and close the transaction. */
+void st7789_blit_wait(void);
+
 /** Flood a rectangle with a single colour without needing a pixel buffer. */
 void st7789_fill(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
                  uint16_t color);

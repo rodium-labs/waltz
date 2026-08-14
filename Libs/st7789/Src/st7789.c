@@ -331,6 +331,28 @@ static void spi_dma_end(void) {
   SPI1->CR2 &= ~SPI_CR2_TXDMAEN;
 }
 
+/** Arm the stream for @p count bytes and let it go. Does not wait. */
+static void dma_arm(const void *src, uint32_t count) {
+  DMA2->LIFCR = DMA_LIFCR_CTCIF3 | DMA_LIFCR_CHTIF3 | DMA_LIFCR_CTEIF3 |
+                DMA_LIFCR_CDMEIF3 | DMA_LIFCR_CFEIF3;
+
+  DMA2_Stream3->PAR = (uint32_t)&SPI1->DR;
+  DMA2_Stream3->M0AR = (uint32_t)src;
+  DMA2_Stream3->NDTR = count;
+  /* channel 3 = SPI1_TX, memory -> peripheral, byte wide both sides */
+  DMA2_Stream3->CR = DMA_SxCR_CHSEL_0 | DMA_SxCR_CHSEL_1 | DMA_SxCR_DIR_0 |
+                     DMA_SxCR_MINC | DMA_SxCR_PL_1;
+  DMA2_Stream3->CR |= DMA_SxCR_EN;
+}
+
+static void dma_park(void) {
+  while (!(DMA2->LISR & DMA_LISR_TCIF3)) {
+  }
+  DMA2_Stream3->CR &= ~DMA_SxCR_EN;
+  while (DMA2_Stream3->CR & DMA_SxCR_EN) {
+  }
+}
+
 /**
  * @brief Blocking DMA push of @p count bytes to SPI1.
  * @param src   Source address in SRAM.
@@ -340,22 +362,8 @@ static void dma_bytes(const void *src, uint32_t count) {
   while (count) {
     uint32_t chunk = (count > 65535U) ? 65535U : count;
 
-    DMA2->LIFCR = DMA_LIFCR_CTCIF3 | DMA_LIFCR_CHTIF3 | DMA_LIFCR_CTEIF3 |
-                  DMA_LIFCR_CDMEIF3 | DMA_LIFCR_CFEIF3;
-
-    DMA2_Stream3->PAR = (uint32_t)&SPI1->DR;
-    DMA2_Stream3->M0AR = (uint32_t)src;
-    DMA2_Stream3->NDTR = chunk;
-    /* channel 3 = SPI1_TX, memory -> peripheral, byte wide both sides */
-    DMA2_Stream3->CR = DMA_SxCR_CHSEL_0 | DMA_SxCR_CHSEL_1 | DMA_SxCR_DIR_0 |
-                       DMA_SxCR_MINC | DMA_SxCR_PL_1;
-    DMA2_Stream3->CR |= DMA_SxCR_EN;
-
-    while (!(DMA2->LISR & DMA_LISR_TCIF3)) {
-    }
-    DMA2_Stream3->CR &= ~DMA_SxCR_EN;
-    while (DMA2_Stream3->CR & DMA_SxCR_EN) {
-    }
+    dma_arm(src, chunk);
+    dma_park();
 
     src = (const uint8_t *)src + chunk;
     count -= chunk;
@@ -473,10 +481,22 @@ void st7789_init(void) {
   /* Clear the whole panel before the backlight comes up, so the user never
    * sees the random contents frame memory holds after power-on. */
   st7789_fill(0, 0, ST7789_W, ST7789_H, 0x0000);
+
+  /* The panel's line period is what the vsync wait counts in. */
+  st7789_sync_calibrate();
 }
 
-void st7789_blit(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
-                 const uint16_t *px) {
+/*
+ * Split so the caller can draw the next band while this one is on the wire.
+ *
+ * A band is 9 kB, well inside the stream's 65535 byte counter, so one transfer
+ * covers it and there is nothing to chunk. Between start and wait the buffer
+ * belongs to the DMA - hand it a different one.
+ */
+static bool blit_busy;
+
+void st7789_blit_start(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
+                       const uint16_t *px) {
   if (!w || !h) {
     return;
   }
@@ -484,9 +504,24 @@ void st7789_blit(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
   cs_low();
   set_window(x, y, w, h);
   spi_dma_begin();
-  dma_bytes(px, (uint32_t)w * h * 2U);
+  dma_arm(px, (uint32_t)w * h * 2U);
+  blit_busy = true;
+}
+
+void st7789_blit_wait(void) {
+  if (!blit_busy) {
+    return;
+  }
+  dma_park();
   spi_dma_end();
   cs_high();
+  blit_busy = false;
+}
+
+void st7789_blit(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
+                 const uint16_t *px) {
+  st7789_blit_start(x, y, w, h, px);
+  st7789_blit_wait();
 }
 
 void st7789_fill(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
