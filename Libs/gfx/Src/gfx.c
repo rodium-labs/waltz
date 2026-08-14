@@ -3,8 +3,22 @@
 /* The one scratch band every primitive writes into. */
 static uint16_t band[GFX_W * GFX_BAND_H];
 
-/* Region of the panel the band currently represents. */
+/*
+ * Where the band lands on the panel, and separately the coordinate origin the
+ * primitives draw against. They are normally the same; gfx_translate() slides
+ * the drawing origin so a whole screen can be painted at an offset without any
+ * paint function knowing about it. That is what makes screen transitions
+ * possible with no framebuffer.
+ */
+static int16_t blit_x, blit_y;
 static int16_t band_x, band_y, band_w, band_h;
+
+/* Optional extra clip, in drawing coordinates. Wide open unless gfx_clip() is
+ * called. The band already bounds everything; this is for callers that must
+ * stay inside a rectangle smaller than the region being flushed. */
+#define CLIP_OPEN 16384
+static int16_t clip_x0 = -CLIP_OPEN, clip_y0 = -CLIP_OPEN;
+static int16_t clip_x1 = CLIP_OPEN, clip_y1 = CLIP_OPEN;
 
 static inline int16_t min16(int16_t a, int16_t b) { return a < b ? a : b; }
 static inline int16_t max16(int16_t a, int16_t b) { return a > b ? a : b; }
@@ -55,15 +69,37 @@ void gfx_flush(int16_t x, int16_t y, int16_t w, int16_t h, gfx_paint_fn paint,
   }
 
   for (yy = y; yy < y + h; yy = (int16_t)(yy + GFX_BAND_H)) {
+    gfx_clip_reset();
+    blit_x = x;
+    blit_y = yy;
     band_x = x;
     band_y = yy;
     band_w = w;
     band_h = min16(GFX_BAND_H, (int16_t)(y + h - yy));
 
     paint(ud);
-    st7789_blit((uint16_t)band_x, (uint16_t)band_y, (uint16_t)band_w,
+    st7789_blit((uint16_t)blit_x, (uint16_t)blit_y, (uint16_t)band_w,
                 (uint16_t)band_h, band);
   }
+}
+
+void gfx_clip(int16_t x, int16_t y, int16_t w, int16_t h) {
+  clip_x0 = x;
+  clip_y0 = y;
+  clip_x1 = (int16_t)(x + w);
+  clip_y1 = (int16_t)(y + h);
+}
+
+void gfx_clip_reset(void) {
+  clip_x0 = -CLIP_OPEN;
+  clip_y0 = -CLIP_OPEN;
+  clip_x1 = CLIP_OPEN;
+  clip_y1 = CLIP_OPEN;
+}
+
+void gfx_translate(int16_t dx, int16_t dy) {
+  band_x = (int16_t)(blit_x - dx);
+  band_y = (int16_t)(blit_y - dy);
 }
 
 void gfx_clear(uint16_t color) { st7789_fill(0, 0, GFX_W, GFX_H, color); }
@@ -71,10 +107,10 @@ void gfx_clear(uint16_t color) { st7789_fill(0, 0, GFX_W, GFX_H, color); }
 /* Primitives -------------------------------------------------------------- */
 
 void gfx_fill(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {
-  int16_t x0 = max16(x, band_x);
-  int16_t y0 = max16(y, band_y);
-  int16_t x1 = min16((int16_t)(x + w), (int16_t)(band_x + band_w));
-  int16_t y1 = min16((int16_t)(y + h), (int16_t)(band_y + band_h));
+  int16_t x0 = max16(max16(x, band_x), clip_x0);
+  int16_t y0 = max16(max16(y, band_y), clip_y0);
+  int16_t x1 = min16(min16((int16_t)(x + w), (int16_t)(band_x + band_w)), clip_x1);
+  int16_t y1 = min16(min16((int16_t)(y + h), (int16_t)(band_y + band_h)), clip_y1);
   int16_t yy;
 
   for (yy = y0; yy < y1; ++yy) {
@@ -89,6 +125,9 @@ void gfx_fill(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {
 void gfx_pixel(int16_t x, int16_t y, uint16_t color) {
   if (x < band_x || y < band_y || x >= band_x + band_w ||
       y >= band_y + band_h) {
+    return;
+  }
+  if (x < clip_x0 || y < clip_y0 || x >= clip_x1 || y >= clip_y1) {
     return;
   }
   band[(y - band_y) * band_w + (x - band_x)] = color;
@@ -203,6 +242,37 @@ static int16_t half_chord(int16_t r, int16_t dy) {
     return 0;
   }
   return (int16_t)((isqrt(4 * v) + 1) / 2);
+}
+
+void gfx_rrect_ring(int16_t x, int16_t y, int16_t w, int16_t h, int16_t r,
+                    int16_t t, uint16_t color) {
+  int16_t y0 = max16(y, band_y);
+  int16_t y1 = min16((int16_t)(y + h), (int16_t)(band_y + band_h));
+  int16_t ir;
+  int16_t yy;
+
+  if (r * 2 > w) {
+    r = (int16_t)(w / 2);
+  }
+  if (r * 2 > h) {
+    r = (int16_t)(h / 2);
+  }
+  ir = (int16_t)((r > t) ? (r - t) : 0);
+
+  for (yy = y0; yy < y1; ++yy) {
+    int16_t outer = rrect_inset(yy, y, h, r);
+
+    if (yy < y + t || yy >= y + h - t) {
+      gfx_fill((int16_t)(x + outer), yy, (int16_t)(w - 2 * outer), 1, color);
+    } else {
+      int16_t inner =
+          (int16_t)(rrect_inset(yy, (int16_t)(y + t), (int16_t)(h - 2 * t), ir) +
+                    t);
+      gfx_fill((int16_t)(x + outer), yy, (int16_t)(inner - outer), 1, color);
+      gfx_fill((int16_t)(x + w - inner), yy, (int16_t)(inner - outer), 1,
+               color);
+    }
+  }
 }
 
 void gfx_disc(int16_t cx, int16_t cy, int16_t r, uint16_t color) {

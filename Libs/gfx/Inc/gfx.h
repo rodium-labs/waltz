@@ -87,6 +87,29 @@ void gfx_flush(int16_t x, int16_t y, int16_t w, int16_t h, gfx_paint_fn paint,
 /** Flood the whole panel. Cheap - goes straight to the controller. */
 void gfx_clear(uint16_t color);
 
+/**
+ * @brief Shift the coordinate origin the primitives draw against.
+ *
+ * Valid only inside a paint callback, and it may be called more than once per
+ * callback - which is the point: a transition paints the outgoing screen at one
+ * offset and the incoming one at another, without either screen's paint
+ * function knowing it is being moved. Reset to (0, 0) at the start of every
+ * band, so a callback that never calls it behaves exactly as before.
+ */
+void gfx_translate(int16_t dx, int16_t dy);
+
+/**
+ * @brief Restrict drawing to a rectangle inside the region being flushed.
+ *
+ * Clipping normally falls out of the band for free, which is fine while every
+ * paint function owns exactly the region it is flushed with. It stops being
+ * free the moment one is reused inside a larger flush - a marquee drawn as part
+ * of a whole-screen repaint would otherwise spill its text across the screen.
+ * Reset at the start of every band.
+ */
+void gfx_clip(int16_t x, int16_t y, int16_t w, int16_t h);
+void gfx_clip_reset(void);
+
 /* Primitives - only valid while inside a paint callback ------------------- */
 
 void gfx_fill(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color);
@@ -111,6 +134,15 @@ void gfx_rrect_grad(int16_t x, int16_t y, int16_t w, int16_t h, int16_t r,
  */
 void gfx_rrect_frame(int16_t x, int16_t y, int16_t w, int16_t h, int16_t r,
                      int16_t t, uint16_t color, uint16_t inner);
+
+/**
+ * @brief Rounded-rect outline of thickness @p t that touches nothing inside it.
+ *
+ * Unlike gfx_rrect_frame() this leaves the interior alone, so it can be drawn
+ * over artwork - which is what a focus ring has to do.
+ */
+void gfx_rrect_ring(int16_t x, int16_t y, int16_t w, int16_t h, int16_t r,
+                    int16_t t, uint16_t color);
 
 void gfx_disc(int16_t cx, int16_t cy, int16_t r, uint16_t color);
 /** Annulus from @p r_in (exclusive) to @p r_out (inclusive). */
