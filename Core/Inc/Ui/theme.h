@@ -122,11 +122,6 @@ void Theme_Next(void);
 #define ROW_FORMAT_Y 66
 #define ROW_FORMAT_H 10
 
-/** Hairline between the middle and right columns. */
-#define SEP_X 191
-#define SEP_Y (CONTENT_Y + 2)
-#define SEP_H (GFX_H - SEP_Y - 2)
-
 #define RIGHT_X 196
 #define RIGHT_W 84
 
