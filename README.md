@@ -107,14 +107,14 @@ in `build/Release/` as `.elf`, `.hex` and `.bin`.
 
 **Flash the Release build.** The Debug preset is `-O0`, and on this part that is
 not a detail: drawing a screen costs 26.9 ms unoptimised against 8.5 ms at `-Os`,
-which is the difference between 24 fps and 92. There is a `Debug` preset for when
-a debugger is actually attached.
+which is the difference between 24 fps and 92. The `Debug` preset is for when a
+debugger is actually attached.
 
-Current footprint: **37 kB flash of 256 kB, 24 kB RAM of 64 kB** - the renderer
-paints in bands rather than keeping a 42 kB framebuffer, which leaves room for a
-Helix MP3 decoder later. Two band buffers are 19 kB of that and the gradient row
-table another 2.5 kB; both are there for the frame rate, and both are one
-constant away from being smaller and slower.
+Current footprint: **38 kB flash of 256 kB, 24 kB RAM of 64 kB**. The renderer
+paints in bands rather than keeping a 42 kB framebuffer, which is what leaves room
+for a decoder. Of that RAM, 19 kB is two band buffers and 2.5 kB a gradient row
+table - both bought frame rate, and both are one constant away from being smaller
+and slower.
 
 ## Flash
 
@@ -613,12 +613,12 @@ Core/Src/player.c          mocked transport + level meter (playlist table here)
 Core/Src/input.c           five buttons -> debounced semantic events
 Core/Src/settings.c        settings + lifetime counters in the last flash sector
 Core/Src/power.c           supply rail via the ADC's internal reference
-Core/Src/Ui/player_ui.c    all five screens, one paint function per block
-Core/Src/Ui/theme.c        the ten colour schemes
+Core/Src/Ui/player_ui.c    every screen, one paint function per block
+Core/Src/Ui/theme.c        the sixteen colour schemes
 Core/Inc/Ui/theme.h        palette and block geometry
-Libs/st7789/               panel driver: init, windowing, DMA blits
+Libs/st7789/               panel driver: init, windowing, DMA blits, scanline read
 Libs/gfx/                  banded RGB565 renderer + 1bpp fonts
-Assets/Icons/              hand-drawn 1bpp glyphs (note, headphones, speaker)
+Assets/Icons/              hand-drawn 1bpp glyphs
 Tools/uisim/               renders the UI on the host - see below
 ```
 
