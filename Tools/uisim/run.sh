@@ -24,12 +24,20 @@ cc -O1 -Wall -Wextra -std=gnu11 \
 "$out/uisim" "$out"
 python3 "$here/sheet.py" "$out"/0[1-6]*.ppm "$root/docs/ui-preview.png"
 python3 "$here/sheet.py" "$out"/0[789]*.ppm "$out"/1*.ppm "$root/docs/ui-screens.png"
+python3 "$here/sheet.py" "$out"/05-list.ppm "$out"/10-stats.ppm \
+  "$out"/11-settings.ppm "$root/docs/ui-menus.png"
 python3 "$here/sheet.py" "$out"/T0[0-4]*.ppm "$root/docs/ui-themes-a.png"
 python3 "$here/sheet.py" "$out"/T0[5-9]*.ppm "$root/docs/ui-themes-b.png"
 python3 "$here/sheet.py" "$out"/S0*.ppm "$root/docs/ui-splash.png"
 python3 "$here/zoom.py" "$out/ICONS.ppm" "$root/docs/icons.png" 8 \
   0,0,284,12 196,12,84,26
+# Motion is only judgeable in motion, so the filmstrips become looping GIFs.
+# The transitions get their last frame repeated to hold a beat before the loop
+# restarts; the menu walk already returns to a resting row on its own.
 for f in F1focus F2push F3row F4pop; do
-  python3 "$here/sheet.py" "$out"/$f-*.ppm "$root/docs/anim-$f.png"
+  last=$(ls "$out"/$f-*.ppm | tail -1)
+  python3 "$here/gif.py" "$root/docs/anim-$f.gif" 3 2 \
+    "$out"/$f-*.ppm "$last" "$last" "$last" "$last" "$last" "$last"
 done
+python3 "$here/gif.py" "$root/docs/anim-F5menu.gif" 3 2 "$out"/F5menu-*.ppm
 rm -rf "$out"
