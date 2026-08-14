@@ -1325,13 +1325,25 @@ void Ui_Splash(void) {
 
 /* Overlays ---------------------------------------------------------------- */
 
+static void paint_screen_content(ui_screen_t which);
+
 static void paint_hud(void *ud) {
   const int16_t iy = (int16_t)(HUD_Y + (HUD_H - 9) / 2);
   char value[8];
   char *p;
 
   (void)ud;
-  paint_backdrop(HUD_X, HUD_Y, HUD_W, HUD_H);
+  /*
+   * What is behind the card, not a rectangle of backdrop. The corners of a
+   * rounded card show whatever is underneath, and filling the rect with plain
+   * backdrop put a square patch around it - visible as a box the roundings sat
+   * inside. Repainting the screen under the clip costs a little and is the only
+   * honest answer with no framebuffer to read back from.
+   */
+  gfx_clip(HUD_X, HUD_Y, HUD_W, HUD_H);
+  paint_screen_content(screen);
+  gfx_clip_reset();
+
   glass_panel(HUD_X, HUD_Y, HUD_W, HUD_H, 10, 46, COL_TEXT);
 
   if (hud_kind == HUD_NOTICE) {
