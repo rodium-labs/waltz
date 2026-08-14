@@ -285,11 +285,21 @@ static void MX_SPI1_Init(void)
   hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
   hspi1.Init.NSS = SPI_NSS_SOFT;
-  /* PCLK2 = 84 MHz, /4 = 21 MHz. A full 284x76 frame is 43 kB, so 16 ms - and
-   * the UI only ever repaints the blocks that changed. Speed was ruled out as a
-   * suspect during bring-up (1.3 MHz behaved exactly like 21 MHz), so drop to
-   * _8 only if long jumpers start showing noise. */
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_4;
+  /*
+   * PCLK2 = 84 MHz, /2 = 42 MHz, which is the part's ceiling for SPI1.
+   *
+   * This is not about throughput for its own sake. The panel scans a column
+   * every 48.8 us (see st7789_read_probe), and to put a frame down without a
+   * tear the write has to stay ahead of that scan the whole way across. At
+   * 21 MHz a full content write ran 49.3 us per column - fractionally slower
+   * than the scan, so it was overtaken every single frame. Halving the clock
+   * period is what makes vsync possible at all here.
+   *
+   * Speed was ruled out as a suspect during bring-up (1.3 MHz behaved exactly
+   * like 21 MHz), so if long jumpers ever start showing noise this is the first
+   * thing to walk back - _4 was known good.
+   */
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
   hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;

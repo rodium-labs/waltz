@@ -420,7 +420,17 @@ static void set_window(uint16_t x, uint16_t y, uint16_t w, uint16_t h) {
 /* Public API -------------------------------------------------------------- */
 
 void st7789_init(void) {
-  static const uint8_t porctrl[] = {0x0C, 0x0C, 0x00, 0x33, 0x33};
+  /*
+   * Back and front porch, 0x0F each rather than the usual 0x0C.
+   *
+   * Six extra blank lines is six extra lines of head start before the scan
+   * re-enters the visible strip, and the frame has to be fully written inside
+   * that head start plus the crossing time. At 0x0C the margin was 95 us -
+   * about two scan lines, which any heavier frame would have eaten. The cost is
+   * the refresh dropping from 60.1 Hz to 58.6, which is not a thing anyone can
+   * see on a sample-and-hold panel.
+   */
+  static const uint8_t porctrl[] = {0x0F, 0x0F, 0x00, 0x33, 0x33};
   static const uint8_t pos_gamma[] = {0xD0, 0x04, 0x0D, 0x11, 0x13, 0x2B, 0x3F,
                                       0x54, 0x4C, 0x18, 0x0D, 0x0B, 0x1F, 0x23};
   static const uint8_t neg_gamma[] = {0xD0, 0x04, 0x0C, 0x11, 0x13, 0x2C, 0x3F,
