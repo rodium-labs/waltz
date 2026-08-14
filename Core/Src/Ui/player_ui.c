@@ -277,33 +277,63 @@ static int16_t right_to(int16_t right, const gfx_font_t *f, const char *s) {
 
 /* Shared glyphs ----------------------------------------------------------- */
 
-/** Two crossing arrows. */
+/**
+ * Two paths that run in straight, cross, and leave through arrowheads.
+ *
+ * The straight stubs at both ends are the whole trick: a bare X reads as a
+ * cross or a close button, and only the entries and exits make it read as two
+ * routes swapping over.
+ */
 static void draw_shuffle(int16_t x, int16_t y, int16_t w, int16_t h,
                          uint16_t c) {
-  gfx_line(x, y, (int16_t)(x + w - 1), (int16_t)(y + h - 1), c);
-  gfx_line(x, (int16_t)(y + h - 1), (int16_t)(x + w - 1), y, c);
-  gfx_tri((int16_t)(x + w - 3), y, 3, 4, GFX_TRI_RIGHT, c);
-  gfx_tri((int16_t)(x + w - 3), (int16_t)(y + h - 4), 3, 4, GFX_TRI_RIGHT, c);
+  int16_t top = (int16_t)(y + 1);
+  int16_t bot = (int16_t)(y + h - 2);
+  int16_t xa = (int16_t)(x + 2);
+  int16_t xb = (int16_t)(x + w - 5);
+
+  gfx_hline(x, top, 3, c);
+  gfx_hline(x, bot, 3, c);
+  gfx_line(xa, top, xb, bot, c);
+  gfx_line(xa, bot, xb, top, c);
+  gfx_hline(xb, top, 2, c);
+  gfx_hline(xb, bot, 2, c);
+  gfx_tri((int16_t)(x + w - 4), (int16_t)(top - 1), 4, 3, GFX_TRI_RIGHT, c);
+  gfx_tri((int16_t)(x + w - 4), (int16_t)(bot - 1), 4, 3, GFX_TRI_RIGHT, c);
 }
 
-/** Cycle glyph: an arrow right over an arrow left. */
+/**
+ * A cycle: out along the top, back along the bottom, with the short verticals
+ * closing the loop so it does not read as two unrelated arrows.
+ */
 static void draw_repeat(int16_t x, int16_t y, int16_t w, int16_t h,
                         uint16_t c) {
-  gfx_hline(x, (int16_t)(y + 1), (int16_t)(w - 3), c);
-  gfx_tri((int16_t)(x + w - 3), (int16_t)(y - 1), 3, 5, GFX_TRI_RIGHT, c);
-  gfx_hline((int16_t)(x + 3), (int16_t)(y + h - 2), (int16_t)(w - 3), c);
-  gfx_tri(x, (int16_t)(y + h - 4), 3, 5, GFX_TRI_LEFT, c);
+  int16_t top = (int16_t)(y + 1);
+  int16_t bot = (int16_t)(y + h - 2);
+
+  gfx_hline((int16_t)(x + 1), top, (int16_t)(w - 5), c);
+  gfx_tri((int16_t)(x + w - 4), (int16_t)(top - 1), 4, 3, GFX_TRI_RIGHT, c);
+  gfx_vline(x, top, 3, c);
+
+  gfx_hline((int16_t)(x + 4), bot, (int16_t)(w - 5), c);
+  gfx_tri(x, (int16_t)(bot - 1), 4, 3, GFX_TRI_LEFT, c);
+  gfx_vline((int16_t)(x + w - 1), (int16_t)(bot - 2), 3, c);
 }
 
-/** Battery pill: 16x9 body plus a 2x3 terminal, 18 px overall. */
+/**
+ * Battery pill: 16x9 body plus a 2x3 terminal, 18 px overall.
+ *
+ * Drawn as an outline rather than a filled-then-inset rect, so it does not
+ * assume the background behind it, and the level is inset far enough to leave
+ * a gap all the way round instead of touching the case.
+ */
 static void draw_battery(int16_t x, int16_t y, uint8_t pct) {
   uint16_t c = (pct <= 15U) ? COL_RED : ((pct <= 35U) ? COL_AMBER : COL_GREEN);
   int16_t fill = (int16_t)(((int32_t)12 * pct + 50) / 100);
 
-  gfx_rrect_frame(x, y, 16, 9, 3, 1, COL_TEXT_MUTE, COL_BG);
-  gfx_fill((int16_t)(x + 16), (int16_t)(y + 3), 2, 3, COL_TEXT_MUTE);
+  gfx_rrect_ring(x, y, 16, 9, 3, 1, COL_TEXT_MUTE);
+  gfx_rrect((int16_t)(x + 16), (int16_t)(y + 3), 2, 3, 1, COL_TEXT_MUTE);
   if (fill > 0) {
-    gfx_fill((int16_t)(x + 2), (int16_t)(y + 2), fill, 5, c);
+    gfx_rrect((int16_t)(x + 2), (int16_t)(y + 2), fill, 5, 1, c);
   }
 }
 
@@ -356,9 +386,9 @@ static void paint_bar(void *ud) {
     gfx_tri(BAR_STATE_X, 2, 6, 8, GFX_TRI_RIGHT, COL_TEXT_MUTE);
   }
 
-  draw_shuffle(BAR_SHUFFLE_X, 2, 9, 8,
+  draw_shuffle(BAR_SHUFFLE_X, 2, 11, 9,
                player.shuffle ? COL_ACCENT3 : COL_TEXT_MUTE);
-  draw_repeat(BAR_REPEAT_X, 2, 9, 8,
+  draw_repeat(BAR_REPEAT_X, 2, 11, 9,
               player.repeat ? COL_ACCENT3 : COL_TEXT_MUTE);
 
   bar_title(buf);
@@ -589,20 +619,23 @@ static void paint_transport(void *ud) {
   (void)ud;
   gfx_fill(RIGHT_X, ROW_TRANSPORT_Y, RIGHT_W, ROW_TRANSPORT_H, COL_BG);
 
+  /* The end bars are what say "previous track" rather than "rewind". */
+  gfx_fill(208, (int16_t)(cy - 5), 2, 10, COL_TEXT_DIM);
   gfx_tri(211, (int16_t)(cy - 5), 5, 10, GFX_TRI_LEFT, COL_TEXT_DIM);
   gfx_tri(217, (int16_t)(cy - 5), 5, 10, GFX_TRI_LEFT, COL_TEXT_DIM);
 
   /* No disc behind it: the glyph carries the accent, and being a size larger
    * than its neighbours is enough to make it the focal point. */
   if (player.playing) {
-    gfx_fill(232, (int16_t)(cy - 7), 3, 14, COL_ACCENT);
-    gfx_fill(238, (int16_t)(cy - 7), 3, 14, COL_ACCENT);
+    gfx_fill(233, (int16_t)(cy - 7), 3, 14, COL_ACCENT);
+    gfx_fill(239, (int16_t)(cy - 7), 3, 14, COL_ACCENT);
   } else {
-    gfx_tri(231, (int16_t)(cy - 7), 11, 14, GFX_TRI_RIGHT, COL_ACCENT);
+    gfx_tri(232, (int16_t)(cy - 7), 11, 14, GFX_TRI_RIGHT, COL_ACCENT);
   }
 
-  gfx_tri(252, (int16_t)(cy - 5), 5, 10, GFX_TRI_RIGHT, COL_TEXT_DIM);
-  gfx_tri(258, (int16_t)(cy - 5), 5, 10, GFX_TRI_RIGHT, COL_TEXT_DIM);
+  gfx_tri(255, (int16_t)(cy - 5), 5, 10, GFX_TRI_RIGHT, COL_TEXT_DIM);
+  gfx_tri(261, (int16_t)(cy - 5), 5, 10, GFX_TRI_RIGHT, COL_TEXT_DIM);
+  gfx_fill(267, (int16_t)(cy - 5), 2, 10, COL_TEXT_DIM);
 }
 
 static void paint_meter(void *ud) {
