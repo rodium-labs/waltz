@@ -74,6 +74,7 @@ typedef enum {
   UI_SETTINGS,
   UI_STATS,
   UI_MESSAGE,
+  UI_INFO,
 } ui_screen_t;
 
 /** Home tiles, in screen order. */
@@ -87,6 +88,7 @@ enum {
   SET_FADE,
   SET_SHUFFLE,
   SET_REPEAT,
+  SET_INFO,
   SET_COUNT,
 };
 
@@ -535,6 +537,9 @@ static void bar_title(char *out) {
   case UI_STATS:
     strcpy(out, "STATS");
     return;
+  case UI_INFO:
+    strcpy(out, "INFO");
+    return;
   default: /* UI_HOME and UI_MESSAGE */
     strcpy(out, "WALTZ");
     return;
@@ -921,12 +926,17 @@ static void settings_row(uint8_t entry, char *label, char *value,
       *color = COL_ACCENT3;
     }
     break;
-  default:
+  case SET_REPEAT:
     strcpy(label, "REPEAT");
     strcpy(value, player.repeat ? "ON" : "OFF");
     if (player.repeat) {
       *color = COL_ACCENT3;
     }
+    break;
+  default:
+    /* No value: it opens a screen rather than holding a setting, and a row with
+     * nothing on the right reads as an action instead of a choice. */
+    strcpy(label, "INFO");
     break;
   }
 }
@@ -1326,6 +1336,7 @@ void Ui_Splash(void) {
 /* Overlays ---------------------------------------------------------------- */
 
 static void paint_screen_content(ui_screen_t which);
+static void paint_info(void *ud);
 
 static void paint_hud(void *ud) {
   const int16_t iy = (int16_t)(HUD_Y + (HUD_H - 9) / 2);
@@ -1375,6 +1386,41 @@ static void paint_hud(void *ud) {
 
   gfx_text(right_to((int16_t)(HUD_X + HUD_W - 12), &Font_Mono6x8, value),
            (int16_t)(HUD_Y + (HUD_H - 8) / 2), &Font_Mono6x8, value, COL_TEXT);
+}
+
+/*
+ * Who made it. The splash already says Waltz and Rodium Labs, so this says the
+ * part the splash leaves out - and repeats the record motif so the two read as
+ * the same product rather than two screens that happen to share a palette.
+ */
+static void paint_info(void *ud) {
+  const int16_t cx = 32;
+  const int16_t cy = CONTENT_Y + 24;
+  int16_t r;
+
+  (void)ud;
+  paint_backdrop(0, CONTENT_Y, GFX_W, CONTENT_H);
+
+  gfx_rrect_grad(8, (int16_t)(CONTENT_Y + 4), 48, 48, 10, COL_ACCENT2,
+                 COL_ACCENT);
+  gfx_disc(cx, cy, 15, GFX_RGB(0x0E, 0x0E, 0x14));
+  gfx_circle(cx, cy, 15, gfx_mix(COL_ACCENT2, COL_TEXT, 90));
+  for (r = 12; r >= 9; r = (int16_t)(r - 3)) {
+    gfx_circle(cx, cy, r, GFX_RGB(0x24, 0x24, 0x30));
+  }
+  gfx_disc(cx, cy, 6, COL_AMBER);
+  gfx_bitmap((int16_t)(cx - 3), (int16_t)(cy - 4), 7, 9, icon_note,
+             GFX_RGB(0x14, 0x10, 0x18));
+
+  gfx_text(66, (int16_t)(CONTENT_Y + 3), &Font_Mono11x18, "Waltz", COL_TEXT);
+  gfx_fill(66, (int16_t)(CONTENT_Y + 24), 55, 1, COL_ACCENT);
+
+  gfx_text(66, (int16_t)(CONTENT_Y + 29), &Font_Mono6x8,
+           "Yusuf \"Antaresrvish\" Yildirim", COL_TEXT);
+  gfx_text(66, (int16_t)(CONTENT_Y + 39), &Font_Mono6x8, "Rodium Labs",
+           COL_ACCENT);
+  gfx_text(66, (int16_t)(CONTENT_Y + 51), &Font_Mono6x8,
+           "STM32F401 . ST7789P3 . 284x76", COL_TEXT_MUTE);
 }
 
 /*
@@ -1432,6 +1478,8 @@ static void paint_screen_content(ui_screen_t which) {
     paint_player_all(NULL);
   } else if (which == UI_MESSAGE) {
     paint_message(NULL);
+  } else if (which == UI_INFO) {
+    paint_info(NULL);
   } else {
     paint_menu((void *)active_menu());
   }
@@ -1515,6 +1563,18 @@ static void enter_settings(void) {
 
 static void enter_stats(void) { go(UI_STATS); }
 
+/*
+ * Same as go(), animated as coming back out. go() picks the direction from the
+ * destination, which is right everywhere except a leaf screen returning to the
+ * menu that opened it.
+ */
+static void go_back(ui_screen_t next) {
+  go(next);
+  slide.dir = -1;
+}
+
+static void enter_info(void) { go(UI_INFO); }
+
 static void enter_message(const char *title, const char *detail) {
   msg_title = title;
   msg_detail = detail;
@@ -1579,9 +1639,11 @@ static void setting_step(int8_t dir) {
   case SET_SHUFFLE:
     Player_ToggleShuffle();
     break;
-  default:
+  case SET_REPEAT:
     Player_ToggleRepeat();
     break;
+  default:
+    break; /* SET_INFO has no value to step */
   }
   page_dirty = true;
   bar_dirty = true;
@@ -1595,6 +1657,11 @@ static void menu_activate(void) {
   }
   if (screen == UI_STATS) {
     return; /* read-only */
+  }
+
+  if (set_sel == SET_INFO) {
+    enter_info();
+    return;
   }
 
   /* On/off rows have nothing to scroll through, so PLAY just flips them and
@@ -1720,6 +1787,18 @@ static void handle_input(uint32_t now) {
     case UI_MESSAGE:
       if (e == INPUT_PLAY || e == INPUT_MENU) {
         enter_home();
+      } else if (e == INPUT_VOL_DOWN) {
+        volume_step(-2, now);
+      } else if (e == INPUT_VOL_UP) {
+        volume_step(2, now);
+      }
+      break;
+
+    case UI_INFO:
+      /* Back to the row it was opened from, not out to home - it is a leaf of
+       * the settings page, not a screen of its own. */
+      if (e == INPUT_PLAY || e == INPUT_MENU) {
+        go_back(UI_SETTINGS);
       } else if (e == INPUT_VOL_DOWN) {
         volume_step(-2, now);
       } else if (e == INPUT_VOL_UP) {
@@ -1929,9 +2008,10 @@ void Ui_Tick(uint32_t now) {
     page_dirty = true;
   }
 
-  if (screen == UI_MESSAGE) {
+  if (screen == UI_MESSAGE || screen == UI_INFO) {
     if (page_dirty) {
-      gfx_flush(0, CONTENT_Y, GFX_W, CONTENT_H, paint_message, NULL);
+      gfx_flush(0, CONTENT_Y, GFX_W, CONTENT_H,
+                (screen == UI_INFO) ? paint_info : paint_message, NULL);
       page_dirty = false;
     }
     latch();
