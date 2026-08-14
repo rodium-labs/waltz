@@ -1021,15 +1021,39 @@ static uint8_t *active_top(void) {
   return (screen == UI_STATS) ? &stat_top : &list_top;
 }
 
+/** Proportional position rail. Wrapping lists give no other sense of place. */
+static void paint_menu_rail(uint8_t count, uint8_t top) {
+  const int16_t track_y = MENU_Y;
+  const int16_t track_h = (int16_t)(MENU_ROWS * MENU_ROW_H);
+  int16_t thumb_h, thumb_y;
+
+  if (count <= MENU_ROWS) {
+    return;
+  }
+
+  thumb_h = (int16_t)(((int32_t)track_h * MENU_ROWS) / count);
+  if (thumb_h < 6) {
+    thumb_h = 6;
+  }
+  thumb_y = (int16_t)(track_y + ((int32_t)(track_h - thumb_h) * top) /
+                                    (count - MENU_ROWS));
+
+  gfx_rrect(MENU_RAIL_X, track_y, MENU_RAIL_W, track_h, 1,
+            gfx_mix(backdrop_row(track_y), COL_TEXT, 26));
+  gfx_rrect(MENU_RAIL_X, thumb_y, MENU_RAIL_W, thumb_h, 1, COL_TEXT_DIM);
+}
+
 static void paint_menu(void *ud) {
   const menu_def_t *m = (const menu_def_t *)ud;
   const uint8_t sel = *active_sel();
   const uint8_t top = *active_top();
+  const uint8_t count = m->count();
   char label[MENU_LABEL_MAX];
   char value[MENU_VALUE_MAX];
   uint8_t row;
 
   paint_backdrop(0, CONTENT_Y, GFX_W, CONTENT_H);
+  paint_menu_rail(count, top);
 
   {
     /* Highlight first, then the rows on top of it, so it reads as a surface
@@ -1037,15 +1061,17 @@ static void paint_menu(void *ud) {
     uint16_t p = ease_out(HAL_GetTick() - move_start, ANIM_SELECT_MS);
     int16_t hy = lerp(sel_y_from, sel_y_to, p);
 
-    glass_panel(2, hy, (int16_t)(GFX_W - 4), MENU_ROW_H, 4, 46, COL_ACCENT);
+    glass_panel(MENU_PILL_X, hy, MENU_PILL_W, MENU_ROW_H, 4,
+                set_editing ? 86 : 46, COL_ACCENT);
   }
 
   for (row = 0; row < MENU_ROWS; ++row) {
     uint8_t entry = (uint8_t)(top + row);
     int16_t y = (int16_t)(MENU_Y + row * MENU_ROW_H);
+    int16_t vx;
     uint16_t color = COL_TEXT_DIM;
 
-    if (entry >= m->count()) {
+    if (entry >= count) {
       break;
     }
 
@@ -1057,10 +1083,20 @@ static void paint_menu(void *ud) {
       }
     }
 
-    gfx_text(6, (int16_t)(y + 2), &Font_Mono6x8, label, color);
-    if (value[0]) {
-      gfx_text(right_to((int16_t)(GFX_W - 6), &Font_Mono6x8, value),
-               (int16_t)(y + 2), &Font_Mono6x8, value, color);
+    gfx_text(MENU_TEXT_X, (int16_t)(y + 2), &Font_Mono6x8, label, color);
+    if (!value[0]) {
+      continue;
+    }
+
+    vx = right_to(MENU_TEXT_RIGHT, &Font_Mono6x8, value);
+    gfx_text(vx, (int16_t)(y + 2), &Font_Mono6x8, value, color);
+
+    /* Chevrons say which way the buttons move the value, and only appear on
+     * the row being edited - nothing else on this screen takes PREV/NEXT. */
+    if (set_editing && entry == sel) {
+      gfx_tri((int16_t)(vx - 7), (int16_t)(y + 3), 3, 5, GFX_TRI_LEFT, color);
+      gfx_tri((int16_t)(MENU_TEXT_RIGHT + 2), (int16_t)(y + 3), 3, 5,
+              GFX_TRI_RIGHT, color);
     }
   }
 }
@@ -1448,18 +1484,35 @@ static void enter_list(void) {
   menu_scroll_into_view();
 }
 
-static void enter_settings(void) { go(UI_SETTINGS); }
+static void enter_settings(void) {
+  set_editing = false;
+  go(UI_SETTINGS);
+}
 
 static void enter_stats(void) { go(UI_STATS); }
 
+static void enter_message(const char *title, const char *detail) {
+  msg_title = title;
+  msg_detail = detail;
+  go(UI_MESSAGE);
+}
+
 /** Leaving settings is the commit point for the stored configuration. */
 static void leave_settings(void) {
+  set_editing = false;
   settings.theme = Theme_Index();
   (void)Settings_Save();
   enter_home();
 }
 
 static void home_activate(void) {
+  /* Both music tiles need something to play. With storage attached this is
+   * where an empty or missing card surfaces, instead of an empty list. */
+  if ((home_sel == TILE_MUSIC || home_sel == TILE_LIST) && player.count == 0U) {
+    enter_message("NO TRACKS", "nothing on the card");
+    return;
+  }
+
   switch (home_sel) {
   case TILE_MUSIC:
     enter_now();
@@ -1476,30 +1529,25 @@ static void home_activate(void) {
   }
 }
 
-static void menu_activate(void) {
-  if (screen == UI_LIST) {
-    Player_Select(*active_sel());
-    enter_now();
-    return;
-  }
-  if (screen == UI_STATS) {
-    return; /* read-only */
-  }
+/** Step a value by one, either way, wrapping at both ends. */
+static uint8_t wrap_step(uint8_t v, uint8_t count, int8_t dir) {
+  return (uint8_t)((v + count + (dir > 0 ? 1 : -1)) % count);
+}
 
+static void setting_step(int8_t dir) {
   switch (set_sel) {
   case SET_THEME:
-    Theme_Next();
+    Theme_Set(wrap_step(Theme_Index(), Theme_Count(), dir));
     break;
   case SET_BRIGHTNESS:
-    settings.brightness =
-        (uint8_t)((settings.brightness + 1U) % BRIGHTNESS_STEPS);
+    settings.brightness = wrap_step(settings.brightness, BRIGHTNESS_STEPS, dir);
     backlight_to(brightness_percent());
     break;
   case SET_BLANK:
-    settings.blank = (uint8_t)((settings.blank + 1U) % BLANK_STEPS);
+    settings.blank = wrap_step(settings.blank, BLANK_STEPS, dir);
     break;
   case SET_FADE:
-    settings.fade = (uint8_t)((settings.fade + 1U) % FADE_STEPS);
+    settings.fade = wrap_step(settings.fade, FADE_STEPS, dir);
     /* Show the new speed straight away by dipping and coming back. */
     bl_level = 0;
     backlight_to(brightness_percent());
@@ -1513,6 +1561,27 @@ static void menu_activate(void) {
   }
   page_dirty = true;
   bar_dirty = true;
+}
+
+static void menu_activate(void) {
+  if (screen == UI_LIST) {
+    Player_Select(*active_sel());
+    enter_now();
+    return;
+  }
+  if (screen == UI_STATS) {
+    return; /* read-only */
+  }
+
+  /* On/off rows have nothing to scroll through, so PLAY just flips them and
+   * never traps the buttons in an edit mode with two states. */
+  if (set_sel == SET_SHUFFLE || set_sel == SET_REPEAT) {
+    setting_step(1);
+    return;
+  }
+
+  set_editing = !set_editing;
+  page_dirty = true;
 }
 
 /* Screen blanking --------------------------------------------------------- */
@@ -1614,50 +1683,73 @@ static void handle_input(uint32_t now) {
         Player_Seek(5);
         break;
       case INPUT_VOL_DOWN:
-        Player_VolumeStep(-2);
-        bar_dirty = true;
+        volume_step(-2, now);
         break;
       case INPUT_VOL_UP:
-        Player_VolumeStep(2);
-        bar_dirty = true;
+        volume_step(2, now);
         break;
       default:
         break;
       }
       break;
 
-    default: /* UI_LIST, UI_SETTINGS */
+    case UI_MESSAGE:
+      if (e == INPUT_PLAY || e == INPUT_MENU) {
+        enter_home();
+      } else if (e == INPUT_VOL_DOWN) {
+        volume_step(-2, now);
+      } else if (e == INPUT_VOL_UP) {
+        volume_step(2, now);
+      }
+      break;
+
+    default: { /* UI_LIST, UI_SETTINGS, UI_STATS */
+      /* Editing only ever happens on the settings page, but the branch is
+       * shared, so say so rather than trusting the flag on its own. */
+      bool edit = set_editing && (screen == UI_SETTINGS);
+
       switch (e) {
       case INPUT_PREV:
       case INPUT_PREV_HOLD:
-        menu_move(-1);
+        if (edit) {
+          setting_step(-1);
+        } else {
+          menu_move(-1);
+        }
         break;
       case INPUT_NEXT:
       case INPUT_NEXT_HOLD:
-        menu_move(1);
+        if (edit) {
+          setting_step(1);
+        } else {
+          menu_move(1);
+        }
         break;
       case INPUT_PLAY:
         menu_activate();
         break;
       case INPUT_MENU:
-        if (screen == UI_SETTINGS) {
+        if (edit) {
+          /* Back out of the value, not the screen. */
+          set_editing = false;
+          page_dirty = true;
+        } else if (screen == UI_SETTINGS) {
           leave_settings();
         } else {
           enter_home();
         }
         break;
       case INPUT_VOL_DOWN:
-        Player_VolumeStep(-2);
-        bar_dirty = true;
+        volume_step(-2, now);
         break;
       case INPUT_VOL_UP:
-        Player_VolumeStep(2);
-        bar_dirty = true;
+        volume_step(2, now);
         break;
       default:
         break;
       }
       break;
+    }
     }
   }
 }
