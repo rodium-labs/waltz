@@ -29,7 +29,8 @@ python3 "$here/sheet.py" "$out"/05-list.ppm "$out"/10-stats.ppm \
 python3 "$here/sheet.py" "$out"/N0*.ppm "$root/docs/ui-overlays.png"
 python3 "$here/sheet.py" "$out"/T0[0-4]*.ppm "$root/docs/ui-themes-a.png"
 python3 "$here/sheet.py" "$out"/T0[5-9]*.ppm "$root/docs/ui-themes-b.png"
-python3 "$here/sheet.py" "$out"/S0*.ppm "$root/docs/ui-splash.png"
+python3 "$here/sheet.py" "$out"/T1*.ppm "$root/docs/ui-themes-c.png"
+python3 "$here/sheet.py" "$out"/S[0-9]*.ppm "$root/docs/ui-splash.png"
 python3 "$here/zoom.py" "$out/ICONS.ppm" "$root/docs/icons.png" 8 \
   0,0,284,12 196,12,84,26
 # Motion is only judgeable in motion, so the filmstrips become looping GIFs.

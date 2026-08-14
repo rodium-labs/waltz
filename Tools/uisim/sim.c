@@ -213,7 +213,7 @@ int main(int argc, char **argv) {
   } while (0)
 
   /* The splash now follows the stored theme, so render a few of them. */
-  for (int t = 0; t < 10; t += 3) {
+  for (int t = 0; t < Theme_Count(); t += 5) {
     settings.theme = (uint8_t)t;
     Ui_Splash();
     snprintf(path, sizeof path, "%s/S%02d-splash.ppm", outdir, t);
@@ -258,13 +258,34 @@ int main(int argc, char **argv) {
    * there. Going out to MUSIC and back in keeps the track and the elapsed time,
    * so only the palette changes between shots.
    */
-  for (int t = 0; t < 10; ++t) {
+  for (int t = 0; t < Theme_Count(); ++t) {
     Theme_Set((uint8_t)t);
     home_pick(TILE_MUSIC);
     press(INPUT_PLAY);
     run_for(600);
     snprintf(path, sizeof path, "%s/T%02d-theme.ppm", outdir, t);
     dump(path);
+  }
+  /*
+   * The two light schemes on the home screen. Frosted panels over a light
+   * backdrop are where an assumption about a dark background shows up, and the
+   * theme walk above only ever sees the player.
+   */
+  for (int t = 0; t < Theme_Count(); ++t) {
+    if (strcmp(Theme_Name((uint8_t)t), "PAPER") != 0 &&
+        strcmp(Theme_Name((uint8_t)t), "FROST") != 0) {
+      continue;
+    }
+    Theme_Set((uint8_t)t);
+    /* A palette change only reaches the panel when something repaints, so
+     * bounce through a screen to force one. The settings row does this with
+     * page_dirty; nothing here has pressed it. */
+    home_pick(TILE_MUSIC);
+    press(INPUT_PLAY);
+    run_for(400);
+    home_pick(TILE_TRACKS);
+    run_for(300);
+    NSHOT("light-home");
   }
   Theme_Set(0);
 
@@ -369,6 +390,16 @@ int main(int argc, char **argv) {
     run_for(300);
   }
   film(outdir, "F6spin", 32, 90); /* one step of the spin table per frame */
+
+  /*
+   * The moment after a track change. The backdrop takes its colour from the
+   * cover, so this is where repainting only the widgets that carry track data
+   * shows its seams.
+   */
+  press(INPUT_NEXT);
+  run_for(150);
+  NSHOT("track-change");
+  run_for(600);
 
   /* a settings row being edited */
   home_pick(TILE_SETTINGS);
