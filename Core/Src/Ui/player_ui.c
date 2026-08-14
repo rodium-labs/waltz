@@ -1031,6 +1031,11 @@ static uint8_t *active_top(void) {
   return (screen == UI_STATS) ? &stat_top : &list_top;
 }
 
+/** Where the highlight sits this instant, mid-slide or settled. */
+static int16_t menu_pill_y(uint32_t now) {
+  return lerp(sel_y_from, sel_y_to, ease_out(now - move_start, ANIM_SELECT_MS));
+}
+
 /** Proportional position rail. Wrapping lists give no other sense of place. */
 static void paint_menu_rail(uint8_t count, uint8_t top) {
   const int16_t track_y = MENU_Y;
@@ -1068,8 +1073,7 @@ static void paint_menu(void *ud) {
   {
     /* Highlight first, then the rows on top of it, so it reads as a surface
      * the text sits on rather than a box drawn around the text. */
-    uint16_t p = ease_out(HAL_GetTick() - move_start, ANIM_SELECT_MS);
-    int16_t hy = lerp(sel_y_from, sel_y_to, p);
+    int16_t hy = menu_pill_y(HAL_GetTick());
 
     glass_panel(MENU_PILL_X, hy, MENU_PILL_W, MENU_ROW_H, 4,
                 set_editing ? 86 : 46, COL_ACCENT);
