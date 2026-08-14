@@ -49,9 +49,10 @@ SPI3 SD (PB3/4/5, PA15) pins the audio side will want later.
 
 Onboard LED on PC13 blinks once a second as a heartbeat.
 
-SPI1 runs at 21 MHz (PCLK2 84 MHz / 4). A full 284x76 frame is 43 kB, so 16 ms;
-the UI only repaints the blocks that changed. Drop `BaudRatePrescaler` in
-`MX_SPI1_Init()` to `_8` if long jumpers start showing noise.
+SPI1 runs at 42 MHz (PCLK2 84 MHz / 2), which is the part's ceiling. That is not
+about throughput for its own sake - see [Vsync](#vsync) for why the clock has to
+beat the panel's own scan. Drop `BaudRatePrescaler` in `MX_SPI1_Init()` to `_4`
+if long jumpers start showing noise; that was the known-good setting.
 
 The backlight on this module is **active low**: BLK pulled low lights it. That is
 what `ST7789_BLK_ACTIVE_LOW` handles, and `st7789_backlight()` compensates so 0
@@ -97,29 +98,36 @@ for SPI3 costs trace output but not SWD, which stays on PA13/PA14.
 ## Build
 
 ```bash
-cmake --preset Debug
-cmake --build --preset Debug
+cmake --preset Release
+cmake --build --preset Release
 ```
 
 Needs `arm-none-eabi-gcc` from STM32CubeCLT plus `ninja` on `PATH`. Output lands
-in `build/Debug/` as `.elf`, `.hex` and `.bin`.
+in `build/Release/` as `.elf`, `.hex` and `.bin`.
 
-Current footprint: **47 kB flash of 256 kB, 11 kB RAM of 64 kB** - the renderer
+**Flash the Release build.** The Debug preset is `-O0`, and on this part that is
+not a detail: drawing a screen costs 26.9 ms unoptimised against 8.5 ms at `-Os`,
+which is the difference between 24 fps and 92. There is a `Debug` preset for when
+a debugger is actually attached.
+
+Current footprint: **37 kB flash of 256 kB, 24 kB RAM of 64 kB** - the renderer
 paints in bands rather than keeping a 42 kB framebuffer, which leaves room for a
-Helix MP3 decoder later.
+Helix MP3 decoder later. Two band buffers are 19 kB of that and the gradient row
+table another 2.5 kB; both are there for the frame rate, and both are one
+constant away from being smaller and slower.
 
 ## Flash
 
 With an ST-Link on SWD:
 
 ```bash
-/opt/ST/STM32CubeCLT_1.20.0/STM32CubeProgrammer/bin/STM32_Programmer_CLI -c port=SWD -w build/Debug/waltz.elf -rst
+/opt/ST/STM32CubeCLT_1.20.0/STM32CubeProgrammer/bin/STM32_Programmer_CLI -c port=SWD -w build/Release/waltz.elf -rst
 ```
 
 Or over USB DFU - hold BOOT0, tap NRST, release BOOT0:
 
 ```bash
-dfu-util -a 0 -s 0x08000000:leave -D build/Debug/waltz.bin
+dfu-util -a 0 -s 0x08000000:leave -D build/Release/waltz.bin
 ```
 
 ## What this panel actually needed
@@ -137,6 +145,7 @@ Bringing the module up took a while, so here is the record - all of it lives in
 Two things that did **not** turn out to be the problem, in case they look
 tempting: SPI clock speed (1.3 MHz behaved exactly like 21 MHz) and the
 CASET/RASET offsets (82/18 portrait, 18/82 landscape - correct from the start).
+The clock is at 42 MHz now, but for vsync, not because the panel ever minded.
 
 ### Diagnostics
 
@@ -151,6 +160,9 @@ answers a different question and none of them needs test equipment.
   screen. Answers *which format is this panel?* without anyone having to name a
   hue. This is what finally settled it.
 * `UI_PANEL_CHECK` in `player_ui.h` - six labelled colour strips held for 15 s.
+* `LCD_READ_PROBE` in `main.c` - reads the panel ID and a run of timestamped
+  scanline samples into RAM. Answers *will this module answer a read on SDA, and
+  how fast does it scan?* - which is what made vsync possible without a TE pin.
 
 The splash itself is a permanent self-test: a 1 px border around all four edges
 (any missing edge means the offsets are wrong) plus R/G/B swatches and the
@@ -201,7 +213,139 @@ repeat flags, the screen name, volume, battery. Keeping it global is why the
 player below it fits in 64 rows.
 
 Every list wraps - past the last row is the first one again, in the menus and
-across the home tiles.
+across the home tiles. Long lists get a position rail on the right, since
+wrapping otherwise leaves no sense of where you are.
+
+A sixth screen has no tile: the **message screen**, which any button dismisses.
+It is where the no-card and no-tracks states will land.
+
+## Feedback
+
+![Overlays](docs/ui-overlays.png)
+
+*The volume card, a settings row being edited, the message screen, and a flat
+battery.*
+
+Three things the screens themselves could not say:
+
+**Volume** used to be a six pixel number in the corner of the status bar, which
+is not where anyone is looking when they press the button. Now any volume press
+raises a card over the content for a second. It takes the screen back when it
+expires by repainting whole - nothing recorded what it covered, and with no
+framebuffer there is nothing to restore from.
+
+**Position in a list.** Five rows are visible and the lists wrap, so with a card
+full of tracks there would be no sense of place at all. A rail on the right
+carries a proportional thumb. The lane is reserved whether or not the list is
+long enough to need one, so rows do not shift when it appears.
+
+**A flat battery.** Under 15% the case turns red as well as the level - a two
+pixel sliver of red inside a grey outline is easy to walk past. The one-shot
+notice behind it is gated on `Power_HasBatterySense()`, which is false today: the
+rail is regulated, so it will not sag with the cell, and warning off it would be
+crying wolf. It starts working the day a divider goes in.
+
+The message screen is for the states that leave nothing to play - no card, no
+readable tracks, a decoder that gave up. Nothing reaches it while the playlist
+is mocked, but `Ui_ShowMessage()` is there and the empty-playlist path already
+routes to it.
+
+## Frame rate and vsync
+
+The panel had a visible tear that walked across the screen, and chasing it meant
+measuring rather than guessing. There is no console on this board, so the numbers
+live in RAM and come out over SWD:
+
+```bash
+STM32_Programmer_CLI -c port=SWD mode=HOTPLUG -r32 0x20004b6c 16
+```
+
+`UI_FRAME_TIMING` in `player_ui.h` puts the last content repaint, the worst one,
+the count, and how much of it was drawing rather than transfer, at
+`ui_frame_us` and friends. One full-screen repaint, measured four ways:
+
+| | Draw | Transfer | Frame | fps |
+| - | ---- | -------- | ----- | --- |
+| `-O0`, serial, 21 MHz | 26.9 ms | 14.0 ms | 41.0 ms | 24 |
+| `-Os` | 8.3 ms | 14.0 ms | 22.3 ms | 45 |
+| + overlapped bands | 8.5 ms | 14.0 ms | 15.6 ms | 64 |
+| + 42 MHz | 8.5 ms | 7.0 ms | 10.9 ms | 92 |
+| + bands turned to face the scan | 12.1 ms | 7.0 ms | 13.2 ms | 76 |
+| + gradient rows remembered | 9.0 ms | 7.0 ms | 10.4 ms | 96 |
+
+The first line is the embarrassing one: every flash until then had been a Debug
+build. `cmake --preset Release` is `-Os` and it alone took the frame from 41 ms
+to 22 ms.
+
+The second step is that `gfx_flush()` no longer takes turns. It keeps two band
+buffers and draws into one while the DMA is still pushing the other, so the
+drawing hides underneath the transfer instead of adding to it.
+
+The fifth line goes backwards on purpose - turning the bands to run down the
+screen is what makes vsync possible at all, and it cost 3 ms because every band
+redraws the whole screen with most of it clipped away. Two things took that back:
+primitives that miss the band now return before walking their geometry, and
+gradient rows are worked out once and read back by the bands after. Panels that
+share a colour pair share the table, which on the home screen is four of the five
+tiles.
+
+### Vsync
+
+Tear-free needs more than speed - it needs to know where the panel is looking.
+That normally comes from a TE pin, and this module does not break one out.
+
+It does not have to. The controller will answer `GSCAN` (0x45) with the line it
+is currently displaying, and although there is no SDO pad and PA6 is a button,
+SPI can be put in half duplex so the controller replies on SDA itself. That is
+`rd_cmd()` in `st7789.c`, and `st7789_read_probe()` is what settled that this
+module plays along - it returns an ID of 81 81 B3 and a scan counter that climbs
+and wraps:
+
+```
+0 -> 23 -> 49 -> 90 -> 131 -> 173 -> 214 -> 255 -> 296 -> [1] -> 35 -> ...
+```
+
+Fitting a rate to that gives **48.8 us a line, and a frame every 16.63 ms - the
+panel free-runs at 60.1 Hz.**
+
+The geometry matters here. In landscape it is the 284 px dimension that lands on
+the controller's 320 gate lines, so the panel scans our screen *sideways* and
+the tear is a vertical line travelling across. Our strip covers scan lines 18 to
+301.
+
+So the write is a race along the same axis. At 21 MHz a full content write took
+49.3 us per column against the scan's 48.8 us - fractionally slower, so the scan
+overtook it every single frame no matter where it started. That is why the clock
+had to go up: at 42 MHz a column costs 38.2 us, and starting during the porch
+puts every column down well before the scan arrives. The write finishes with the
+scan only a third of the way across.
+
+`gfx_sync_next()` arms that, and the first `gfx_flush()` of the frame consumes
+it - a screen built from several regions is still one frame and waits once, not
+once per region. Nothing waits on a tick that draws nothing, so an idle screen
+keeps polling buttons at full rate.
+
+Two deadlines have to be met, and both are measured rather than assumed. The
+first band has to be down before the scan re-enters the strip, and the whole
+frame has to be down before the scan crosses it. Over 663 frames of being driven
+around by hand:
+
+| | Measured | Budget | Margin |
+| - | -------- | ------ | ------ |
+| First band | 2.71 ms | 3.17 ms porch | +461 us |
+| Steady frame | 10.38 ms | 13.65 ms crossing | +3.27 ms |
+| Worst frame - a transition | 13.56 ms | 13.65 ms crossing | +88 us |
+
+The worst case is a screen transition, which has two whole screens in flight.
+88 us is under two scan lines, so it is inside but not comfortably; if it ever
+needs real headroom, lengthening the line period through `FRCTRL2` buys about
+600 us at the cost of dropping the refresh to around 57 Hz.
+
+The line period is calibrated at boot rather than hardcoded, because it is what
+the wait counts in. It takes the median of eight rising samples: a single pair
+is only right if the counter did not wrap in between, and a wrap looks exactly
+like a slow panel - which is how the first version came back with a line period
+less than half the real one.
 
 ## Surfaces
 
@@ -232,6 +376,12 @@ enough for a smooth ramp, and the first version banded visibly. `gfx_vgrad()` an
 `gfx_rrect_grad()` now dither with an ordered 4x4 Bayer matrix, which trades the
 bands for a stipple that disappears at the panel's pixel pitch.
 
+One primitive came out of looking closely at the cover. `gfx_ring()` with the
+radii one apart is a true annulus, and near the top and bottom a scanline
+crosses it almost horizontally, so it flares into a wide cap - the record's
+grooves had a visible seam at every cardinal point. `gfx_circle()` strokes the
+curve instead and stays one pixel the whole way round.
+
 ## Motion
 
 | | |
@@ -240,6 +390,8 @@ bands for a stipple that disappears at the panel's pixel pitch.
 | Pushing into a screen | Popping back out |
 | ![Focus](docs/anim-F1focus.gif) | ![Menu](docs/anim-F5menu.gif) |
 | The home focus ring moving | The menu highlight walking |
+| ![Spin](docs/anim-F6spin.gif) | |
+| The record turning while it plays | |
 
 *Captured from the simulator every 20 ms, so this is the real timing.*
 
@@ -250,6 +402,11 @@ home focus ring and the menu highlight slide to their new place.
 Animation is time-based rather than frame-based, so a slow frame shortens the
 animation instead of stretching it. Ease-out cubic over 240 ms for screens,
 160 ms for selection.
+
+The cover turns while a track plays and parks the moment it is paused, so a
+still screen stays still. One sweep of light across the grooves carries it,
+stepped from a 32 byte cosine table - a revolution every three seconds, which is
+slower than a real platter because the job is to say *playing* at a glance.
 
 None of it needs a framebuffer. `gfx_translate()` shifts the coordinate origin
 the primitives draw against, so a transition paints the outgoing screen at one
@@ -278,20 +435,35 @@ things: tap to act, hold to go back.
 | PREV / NEXT held | seek in 5 s steps, repeating |
 | VOL-/VOL+ | one step, auto-repeating when held |
 
-**List and settings** - the same scrollable menu, so they behave alike
+**Track list and stats**
 
 | | |
 | - | - |
 | PREV / NEXT | move the selection, auto-repeating |
-| PLAY short | play the highlighted track, or change the highlighted setting |
-| PLAY held | back to home; from settings this is also the save point |
-| VOL-/VOL+ | volume, shown in the status bar |
+| PLAY short | play the highlighted track |
+| PLAY held | back to home |
+| VOL-/VOL+ | volume, on the card |
+
+**Settings** - PLAY steps into a row rather than cycling it in place. THEME has
+ten schemes, and overshooting one used to mean nine more presses to come back
+around.
+
+| | |
+| - | - |
+| PREV / NEXT | move the selection, or step the value when inside a row |
+| PLAY short | enter or leave the row; on/off rows just flip |
+| PLAY held | leave the row, or leave settings - which is the save point |
+| VOL-/VOL+ | volume, on the card |
+
+The row being edited says so: its plate brightens and chevrons appear either
+side of the value.
 
 **Anywhere**
 
 | | |
 | - | - |
 | VOL- + VOL+ together | cycle the play mode: off, shuffle, repeat, both |
+| any button, screen off | wakes only - it does not also act |
 
 That chord exists because every short and long press across the five buttons was
 already spoken for, and digging into settings to flip shuffle is too far to
