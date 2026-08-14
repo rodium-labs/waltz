@@ -129,6 +129,52 @@ static uint8_t home_sel;
 static uint8_t list_sel, list_top;
 static uint8_t set_sel, set_top;
 static uint8_t stat_sel, stat_top;
+/* Animation ---------------------------------------------------------------- */
+
+/*
+ * Time-based, not frame-based: every tick renders one frame at whatever
+ * progress the clock reports, so a slow frame shortens the animation rather
+ * than stretching it. Durations are short on purpose - long enough to read as
+ * movement and show where a screen came from, short enough that nobody waits
+ * on them.
+ */
+#define ANIM_SCREEN_MS 240U
+#define ANIM_SELECT_MS 160U
+
+/** Ease-out cubic over 0..1000. Motion decelerates into place. */
+static uint16_t ease_out(uint32_t elapsed, uint16_t duration) {
+  uint32_t inv;
+
+  if (elapsed >= duration) {
+    return 1000U;
+  }
+  inv = 1000U - ((elapsed * 1000U) / duration);
+  return (uint16_t)(1000U - ((inv * inv * inv) / 1000000U));
+}
+
+/** Interpolate @p a to @p b by @p p thousandths. */
+static int16_t lerp(int16_t a, int16_t b, uint16_t p) {
+  return (int16_t)(a + (((int32_t)(b - a) * (int32_t)p) / 1000));
+}
+
+/** Screen push / pop. dir is +1 when the new screen arrives from the right. */
+static struct {
+  bool active;
+  uint32_t start;
+  ui_screen_t from;
+  int8_t dir;
+} slide;
+
+/** Sliding highlight on the menus and sliding focus ring on the home screen. */
+static int16_t sel_y_from, sel_y_to;
+static int16_t focus_x_from, focus_x_to;
+static uint32_t move_start;
+/** Repaint the content area until this tick - covers the two above. */
+static uint32_t page_anim_until;
+
+/** False until the first screen is on the panel; suppresses the opening slide. */
+static bool ui_ready;
+
 static bool bar_dirty;
 static bool page_dirty;
 static uint16_t pending;
@@ -254,7 +300,7 @@ static void draw_battery(int16_t x, int16_t y, uint8_t pct) {
   uint16_t c = (pct <= 15U) ? COL_RED : ((pct <= 35U) ? COL_AMBER : COL_GREEN);
   int16_t fill = (int16_t)(((int32_t)12 * pct + 50) / 100);
 
-  gfx_rrect_frame(x, y, 16, 9, 2, 1, COL_TEXT_MUTE, COL_CARD);
+  gfx_rrect_frame(x, y, 16, 9, 3, 1, COL_TEXT_MUTE, COL_BG);
   gfx_fill((int16_t)(x + 16), (int16_t)(y + 3), 2, 3, COL_TEXT_MUTE);
   if (fill > 0) {
     gfx_fill((int16_t)(x + 2), (int16_t)(y + 2), fill, 5, c);
@@ -297,7 +343,10 @@ static void paint_bar(void *ud) {
   char *p;
 
   (void)ud;
-  gfx_fill(0, 0, GFX_W, BAR_H, COL_CARD);
+  /* The bar sits on the background with a hairline under it rather than on a
+   * filled block: chrome should recede and let the content read first. */
+  gfx_fill(0, 0, GFX_W, BAR_H, COL_BG);
+  gfx_hline(0, BAR_H - 1, GFX_W, gfx_mix(COL_BG, COL_TEXT_MUTE, 70));
 
   /* Playback state, visible from every screen. */
   if (player.playing) {
@@ -337,35 +386,37 @@ static void paint_home(void *ud) {
                                                 "SETTINGS"};
   static const int16_t knob[3] = {4, 14, 9};
   static const uint8_t chart[3] = {8U, 16U, 12U};
+  uint16_t p = ease_out(HAL_GetTick() - move_start, ANIM_SELECT_MS);
+  int16_t fx = lerp(focus_x_from, focus_x_to, p);
   uint8_t i;
 
   (void)ud;
   gfx_fill(0, CONTENT_Y, GFX_W, CONTENT_H, COL_BG);
 
+  /* Plates first, then the focus fill over the one it is on, then all the tile
+   * content, then the ring. Anything drawn after the content would wipe it. */
+  for (i = 0; i < HOME_TILES; ++i) {
+    gfx_rrect(home_tile_x(i), HOME_TILE_Y, HOME_TILE_W, HOME_TILE_H, 12,
+              gfx_mix(COL_BG, COL_CARD, 200));
+  }
+  gfx_rrect(fx, HOME_TILE_Y, HOME_TILE_W, HOME_TILE_H, 12,
+            gfx_mix(COL_BG, COL_ACCENT, 45));
+
   for (i = 0; i < HOME_TILES; ++i) {
     int16_t x = home_tile_x(i);
     int16_t cx = (int16_t)(x + HOME_TILE_W / 2);
     bool on = (i == home_sel);
-    uint16_t fill = on ? gfx_mix(COL_BG, COL_ACCENT, 55) : COL_CARD;
     uint16_t ink = on ? COL_TEXT : COL_TEXT_DIM;
     uint16_t mark = on ? COL_ACCENT : COL_TEXT_MUTE;
     uint8_t k;
 
-    gfx_rrect(x, HOME_TILE_Y, HOME_TILE_W, HOME_TILE_H, 8, fill);
-    if (on) {
-      gfx_rrect_frame(x, HOME_TILE_Y, HOME_TILE_W, HOME_TILE_H, 8, 1,
-                      COL_ACCENT, fill);
-    }
-
     switch (i) {
     case TILE_MUSIC:
-      /* a record */
       gfx_disc(cx, 34, 10, GFX_RGB(0x0E, 0x0E, 0x14));
       gfx_ring(cx, 34, 10, 9, mark);
       gfx_disc(cx, 34, 3, mark);
       break;
     case TILE_LIST:
-      /* three rows with bullets */
       for (k = 0; k < 3U; ++k) {
         int16_t ry = (int16_t)(27 + k * 7);
         gfx_fill((int16_t)(cx - 12), ry, 3, 3, mark);
@@ -373,16 +424,14 @@ static void paint_home(void *ud) {
       }
       break;
     case TILE_STATS:
-      /* a rising bar chart */
       for (k = 0; k < 3U; ++k) {
-        int16_t h = (int16_t)chart[k];
-        gfx_fill((int16_t)(cx - 11 + k * 8), (int16_t)(42 - h), 6, h,
+        int16_t bh = (int16_t)chart[k];
+        gfx_fill((int16_t)(cx - 11 + k * 8), (int16_t)(42 - bh), 6, bh,
                  (k == 2U) ? mark : ink);
       }
       gfx_hline((int16_t)(cx - 12), 43, 25, ink);
       break;
     default:
-      /* three sliders */
       for (k = 0; k < 3U; ++k) {
         int16_t ry = (int16_t)(28 + k * 6);
         gfx_fill((int16_t)(cx - 12), ry, 24, 2, ink);
@@ -394,6 +443,8 @@ static void paint_home(void *ud) {
     gfx_text(center_in(x, HOME_TILE_W, &Font_Mono6x8, label[i]), 50,
              &Font_Mono6x8, label[i], ink);
   }
+
+  gfx_rrect_ring(fx, HOME_TILE_Y, HOME_TILE_W, HOME_TILE_H, 12, 1, COL_ACCENT);
 }
 
 /* Marquee ----------------------------------------------------------------- */
@@ -405,14 +456,13 @@ static void paint_marquee(void *ud) {
 
   gfx_fill(m->x, m->y, m->w, m->h, COL_BG);
 
-  if (!m->scrolling) {
+  if (m->scrolling) {
+    gfx_text((int16_t)(m->x - m->offset), ty, m->font, m->text, fg);
+    gfx_text((int16_t)(m->x - m->offset + m->text_w + MARQUEE_GAP), ty, m->font,
+             m->text, fg);
+  } else {
     gfx_text(m->x, ty, m->font, m->text, fg);
-    return;
   }
-
-  gfx_text((int16_t)(m->x - m->offset), ty, m->font, m->text, fg);
-  gfx_text((int16_t)(m->x - m->offset + m->text_w + MARQUEE_GAP), ty, m->font,
-           m->text, fg);
 }
 
 static void marquee_set(marquee_t *m, const char *text, uint32_t now) {
@@ -477,13 +527,13 @@ static void paint_art(void *ud) {
 
 static void paint_bar_row(void *ud) {
   const track_t *t = Player_Track();
-  const int16_t ty = ROW_BAR_Y + (ROW_BAR_H - 4) / 2;
+  const int16_t ty = ROW_BAR_Y + (ROW_BAR_H - 3) / 2;
   int16_t fw;
 
   (void)ud;
   gfx_fill(MID_X, ROW_BAR_Y, MID_W, ROW_BAR_H, COL_BG);
 
-  gfx_rrect(MID_X, ty, MID_W, 4, 2, COL_CARD_HI);
+  gfx_rrect(MID_X, ty, MID_W, 3, 1, gfx_mix(COL_BG, COL_CARD_HI, 220));
 
   fw = t->duration_s
            ? (int16_t)(((int32_t)MID_W * player.elapsed_s) / t->duration_s)
@@ -492,11 +542,11 @@ static void paint_bar_row(void *ud) {
     fw = MID_W;
   }
   if (fw > 0) {
-    gfx_rrect(MID_X, ty, fw, 4, 2, COL_ACCENT);
+    gfx_rrect(MID_X, ty, fw, 3, 1, COL_ACCENT);
   }
 
-  gfx_disc((int16_t)(MID_X + fw), (int16_t)(ty + 2), 4, COL_TEXT);
-  gfx_disc((int16_t)(MID_X + fw), (int16_t)(ty + 2), 2, COL_ACCENT);
+  /* A small dot rather than a grabbable knob - nothing here is draggable. */
+  gfx_disc((int16_t)(MID_X + fw), (int16_t)(ty + 1), 2, COL_ACCENT);
 }
 
 static void paint_time(void *ud) {
@@ -535,19 +585,20 @@ static void paint_transport(void *ud) {
   (void)ud;
   gfx_fill(RIGHT_X, ROW_TRANSPORT_Y, RIGHT_W, ROW_TRANSPORT_H, COL_BG);
 
-  gfx_tri(211, (int16_t)(cy - 5), 5, 10, GFX_TRI_LEFT, COL_TEXT);
-  gfx_tri(217, (int16_t)(cy - 5), 5, 10, GFX_TRI_LEFT, COL_TEXT);
+  gfx_tri(211, (int16_t)(cy - 5), 5, 10, GFX_TRI_LEFT, COL_TEXT_DIM);
+  gfx_tri(217, (int16_t)(cy - 5), 5, 10, GFX_TRI_LEFT, COL_TEXT_DIM);
 
-  gfx_disc(237, cy, 10, COL_ACCENT);
+  /* No disc behind it: the glyph carries the accent, and being a size larger
+   * than its neighbours is enough to make it the focal point. */
   if (player.playing) {
-    gfx_fill(233, (int16_t)(cy - 5), 3, 11, COL_BG);
-    gfx_fill(239, (int16_t)(cy - 5), 3, 11, COL_BG);
+    gfx_fill(232, (int16_t)(cy - 7), 3, 14, COL_ACCENT);
+    gfx_fill(238, (int16_t)(cy - 7), 3, 14, COL_ACCENT);
   } else {
-    gfx_tri(233, (int16_t)(cy - 6), 9, 12, GFX_TRI_RIGHT, COL_BG);
+    gfx_tri(231, (int16_t)(cy - 7), 11, 14, GFX_TRI_RIGHT, COL_ACCENT);
   }
 
-  gfx_tri(252, (int16_t)(cy - 5), 5, 10, GFX_TRI_RIGHT, COL_TEXT);
-  gfx_tri(258, (int16_t)(cy - 5), 5, 10, GFX_TRI_RIGHT, COL_TEXT);
+  gfx_tri(252, (int16_t)(cy - 5), 5, 10, GFX_TRI_RIGHT, COL_TEXT_DIM);
+  gfx_tri(258, (int16_t)(cy - 5), 5, 10, GFX_TRI_RIGHT, COL_TEXT_DIM);
 }
 
 static void paint_meter(void *ud) {
@@ -581,12 +632,6 @@ static void paint_meter(void *ud) {
 
   gfx_hline(METER_X, (int16_t)(base + 1),
             SPECTRUM_BARS * (METER_BAR_W + METER_GAP) - METER_GAP, COL_CARD);
-}
-
-/** Hairline between the middle and right columns. Painted with the art. */
-static void paint_separator(void *ud) {
-  (void)ud;
-  gfx_fill(SEP_X, SEP_Y, 1, SEP_H, COL_CARD);
 }
 
 /* Menus ------------------------------------------------------------------- */
@@ -751,6 +796,16 @@ static void paint_menu(void *ud) {
 
   gfx_fill(0, CONTENT_Y, GFX_W, CONTENT_H, COL_BG);
 
+  {
+    /* Highlight first, then the rows on top of it, so it reads as a surface
+     * the text sits on rather than a box drawn around the text. */
+    uint16_t p = ease_out(HAL_GetTick() - move_start, ANIM_SELECT_MS);
+    int16_t hy = lerp(sel_y_from, sel_y_to, p);
+
+    gfx_rrect(3, hy, (int16_t)(GFX_W - 6), MENU_ROW_H, 4,
+              gfx_mix(COL_BG, COL_ACCENT, 45));
+  }
+
   for (row = 0; row < MENU_ROWS; ++row) {
     uint8_t entry = (uint8_t)(top + row);
     int16_t y = (int16_t)(MENU_Y + row * MENU_ROW_H);
@@ -763,8 +818,6 @@ static void paint_menu(void *ud) {
     m->row(entry, label, value, &color);
 
     if (entry == sel) {
-      gfx_rrect(2, y, (int16_t)(GFX_W - 4), MENU_ROW_H, 3,
-                gfx_mix(COL_BG, COL_ACCENT, 60));
       if (color == COL_TEXT_DIM) {
         color = COL_TEXT;
       }
@@ -797,17 +850,34 @@ static void menu_scroll_into_view(void) {
 }
 
 /** Menus wrap: past the last row is the first one again. */
+/** Pixel row the highlight sits on for the current selection. */
+static int16_t menu_sel_y(void) {
+  return (int16_t)(MENU_Y + (*active_sel() - *active_top()) * MENU_ROW_H);
+}
+
 static void menu_move(int8_t delta) {
   uint8_t count = active_menu()->count();
   int16_t next = (int16_t)((int16_t)*active_sel() + delta);
+  uint8_t top_before;
 
   if (next < 0) {
     next = (int16_t)(count - 1U);
   } else if (next >= (int16_t)count) {
     next = 0;
   }
+  sel_y_from = menu_sel_y();
+  top_before = *active_top();
   *active_sel() = (uint8_t)next;
   menu_scroll_into_view();
+  sel_y_to = menu_sel_y();
+
+  /* When the list scrolls the rows move under the highlight, so sliding it as
+   * well reads as two things moving at once. Snap instead. */
+  if (*active_top() != top_before) {
+    sel_y_from = sel_y_to;
+  }
+  move_start = HAL_GetTick();
+  page_anim_until = move_start + ANIM_SELECT_MS;
   page_dirty = true;
 }
 
@@ -983,6 +1053,53 @@ void Ui_Splash(void) {
   HAL_Delay(1400);
 }
 
+/* Whole-screen painters --------------------------------------------------- */
+
+/*
+ * The player is normally drawn as independent dirty regions, but a transition
+ * has to put the entire screen down in one pass - including the gaps between
+ * widgets, which the per-region paths never touch.
+ */
+static void paint_player_all(void *ud) {
+  (void)ud;
+  gfx_fill(0, CONTENT_Y, GFX_W, CONTENT_H, COL_BG);
+  paint_art(NULL);
+  paint_marquee(&title_mq);
+  paint_marquee(&artist_mq);
+  paint_bar_row(NULL);
+  paint_time(NULL);
+  paint_format(NULL);
+  paint_transport(NULL);
+  paint_meter(NULL);
+}
+
+/** Paint any screen's content area. Menus read the active screen, so it is
+ *  briefly pointed at the one being drawn. */
+static void paint_screen_content(ui_screen_t which) {
+  ui_screen_t saved = screen;
+
+  screen = which;
+  if (which == UI_HOME) {
+    paint_home(NULL);
+  } else if (which == UI_NOW) {
+    paint_player_all(NULL);
+  } else {
+    paint_menu((void *)active_menu());
+  }
+  screen = saved;
+}
+
+static void paint_slide(void *ud) {
+  uint16_t p = *(const uint16_t *)ud;
+  int16_t travel = (int16_t)(GFX_W * slide.dir);
+
+  gfx_translate(lerp(0, (int16_t)-travel, p), 0);
+  paint_screen_content(slide.from);
+  gfx_translate(lerp(travel, 0, p), 0);
+  paint_screen_content(screen);
+  gfx_translate(0, 0);
+}
+
 /* Navigation -------------------------------------------------------------- */
 
 static uint8_t brightness_percent(void) {
@@ -995,8 +1112,9 @@ static void load_track_text(uint32_t now) {
 }
 
 static void go(ui_screen_t next) {
+  ui_screen_t prev = screen;
+
   screen = next;
-  gfx_clear(COL_BG);
   bar_dirty = true;
   page_dirty = true;
   pending = D_ALL;
@@ -1004,6 +1122,18 @@ static void go(ui_screen_t next) {
     title_mq.dirty = true;
     artist_mq.dirty = true;
   }
+
+  if (!ui_ready) {
+    gfx_clear(COL_BG);
+    return;
+  }
+
+  /* Direction carries the hierarchy: going into something pushes it in from
+   * the right, coming back out slides it away to the right. */
+  slide.active = true;
+  slide.start = HAL_GetTick();
+  slide.from = prev;
+  slide.dir = (next == UI_HOME) ? -1 : 1;
 }
 
 static void enter_home(void) { go(UI_HOME); }
@@ -1134,11 +1264,14 @@ static void handle_input(uint32_t now) {
 
     switch (screen) {
     case UI_HOME:
-      if (e == INPUT_PREV) {
-        home_sel = (uint8_t)((home_sel + HOME_TILES - 1U) % HOME_TILES);
-        page_dirty = true;
-      } else if (e == INPUT_NEXT) {
-        home_sel = (uint8_t)((home_sel + 1U) % HOME_TILES);
+      if (e == INPUT_PREV || e == INPUT_NEXT) {
+        focus_x_from = home_tile_x(home_sel);
+        home_sel = (e == INPUT_PREV)
+                       ? (uint8_t)((home_sel + HOME_TILES - 1U) % HOME_TILES)
+                       : (uint8_t)((home_sel + 1U) % HOME_TILES);
+        focus_x_to = home_tile_x(home_sel);
+        move_start = now;
+        page_anim_until = now + ANIM_SELECT_MS;
         page_dirty = true;
       } else if (e == INPUT_PLAY) {
         home_activate();
@@ -1258,6 +1391,14 @@ void Ui_Init(void) {
   latch();
   meter_at = now;
   home_sel = TILE_MUSIC;
+  focus_x_from = home_tile_x(TILE_MUSIC);
+  focus_x_to = focus_x_from;
+  sel_y_from = MENU_Y;
+  sel_y_to = MENU_Y;
+  move_start = now;
+  page_anim_until = now;
+  slide.active = false;
+  ui_ready = false;
   list_sel = 0;
   list_top = 0;
   set_sel = 0;
@@ -1269,6 +1410,7 @@ void Ui_Init(void) {
 
   /* Boot lands on the home screen with nothing playing. */
   enter_home();
+  ui_ready = true;
 }
 
 void Ui_Tick(uint32_t now) {
@@ -1294,6 +1436,27 @@ void Ui_Tick(uint32_t now) {
   if (bar_dirty) {
     gfx_flush(0, 0, GFX_W, BAR_H, paint_bar, NULL);
     bar_dirty = false;
+  }
+
+  if (slide.active) {
+    uint32_t elapsed = now - slide.start;
+    uint16_t p = ease_out(elapsed, ANIM_SCREEN_MS);
+
+    gfx_flush(0, CONTENT_Y, GFX_W, CONTENT_H, paint_slide, &p);
+    if (elapsed >= ANIM_SCREEN_MS) {
+      slide.active = false;
+      page_dirty = true;
+      pending = D_ALL;
+      title_mq.dirty = true;
+      artist_mq.dirty = true;
+    }
+    latch();
+    return;
+  }
+
+  /* A selection or focus move is mid-flight; keep the page coming. */
+  if ((int32_t)(now - page_anim_until) < 0) {
+    page_dirty = true;
   }
 
   if (screen == UI_HOME) {
@@ -1331,7 +1494,6 @@ void Ui_Tick(uint32_t now) {
   if (page_dirty) {
     dirty = D_ALL;
     page_dirty = false;
-    gfx_flush(SEP_X, SEP_Y, 1, SEP_H, paint_separator, NULL);
   }
 
   if (shown.index != player.index) {
