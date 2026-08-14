@@ -193,6 +193,38 @@ static void home_pick(int want) {
   }
 }
 
+/*
+ * Settings rows, in screen order, tracked for exactly the reason the home strip
+ * is: the menu wraps, so no number of presses pins it to the top, and the
+ * selection survives leaving the page. Scenes that walked a fixed number of rows
+ * silently opened the wrong one every time a row was added.
+ */
+enum {
+  SET_THEME,
+  SET_BRIGHTNESS,
+  SET_BLANK,
+  SET_FADE,
+  SET_SHUFFLE,
+  SET_REPEAT,
+  SET_INFO,
+  SET_ROWS
+};
+static int set_row;
+
+/** Step the settings selection one row down, in step with the UI. */
+static void set_next(void) {
+  press(INPUT_NEXT);
+  set_row = (set_row + 1) % SET_ROWS;
+  run_for(220);
+}
+
+/** Light settings row @p want. The settings page has to be up already. */
+static void set_pick(int want) {
+  while (set_row != want) {
+    set_next();
+  }
+}
+
 int main(int argc, char **argv) {
   const char *outdir = (argc > 1) ? argv[1] : ".";
   char path[512];
@@ -340,19 +372,11 @@ int main(int argc, char **argv) {
 
   /* filmstrip: walking the settings rows, which wrap at the bottom */
   film_keys(outdir, "F5menu", 48, 20, INPUT_NEXT, 12);
+  set_row = (set_row + 48 / 12) % SET_ROWS; /* what film_keys just pressed */
   run_for(300);
 
-  /* back to the top row so the FADE walk below still lands where it says */
-  for (int i = 0; i < 8; ++i) {
-    press(INPUT_PREV);
-  }
-  run_for(400);
-
-  /* down to the FADE row, into it, and step the value */
-  press(INPUT_NEXT);
-  press(INPUT_NEXT);
-  press(INPUT_NEXT);
-  run_for(300);
+  /* into the FADE row and step the value */
+  set_pick(SET_FADE);
   press(INPUT_PLAY); /* enter the row */
   run_for(200);
   press(INPUT_NEXT); /* step the value */
@@ -405,6 +429,7 @@ int main(int argc, char **argv) {
   home_pick(TILE_SETTINGS);
   press(INPUT_PLAY);
   run_for(400);
+  set_pick(SET_THEME);
   press(INPUT_PLAY); /* into THEME */
   run_for(250);
   NSHOT("settings-editing");
