@@ -263,6 +263,18 @@ static void tick_transport(uint32_t now) {
   }
 }
 
+/*
+ * The level meter, and it is decorative: there is no audio to measure yet, so
+ * the targets come from an LCG and a fixed beat, with bar_shape[] sloping the
+ * bars downward so the result reads like a spectrum. Pausing drops it to zero,
+ * which is most of why it looks connected to anything.
+ *
+ * When audio lands this is the function to replace. See the level meter entry
+ * under "Not done yet" in the README for the two ways in - an FFT over the
+ * decoded PCM, or reading the spectrum Helix already holds before it synthesises
+ * that PCM. The attack and release below are worth keeping either way; a meter
+ * fed raw magnitudes without them looks like noise.
+ */
 static void tick_level(bool beat) {
   uint8_t i;
 
