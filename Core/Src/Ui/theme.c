@@ -1,10 +1,14 @@
 #include "theme.h"
 
 /*
- * Ten schemes. Each one has to hold up on its own: three text weights that
+ * Sixteen schemes. Each one has to hold up on its own: three text weights that
  * stay legible against bg and card, and three accents that stay apart from each
- * other. The light scheme is here on purpose - it is the one that catches
+ * other. The two light schemes are here on purpose - they are what catch
  * anywhere the UI assumed a dark background.
+ *
+ * One more constraint since the backdrop started taking its tint from the cover
+ * art: bg has to stay far enough from mid grey that a frosted panel drawn over
+ * it still reads as a panel. A scheme whose bg sits halfway has nowhere to go.
  */
 static const ui_theme_t themes[] = {
     {
@@ -159,6 +163,107 @@ static const ui_theme_t themes[] = {
         .amber = GFX_RGB(0xD0, 0xD0, 0xD6),
         .green = GFX_RGB(0xB8, 0xB8, 0xBE),
         .red = GFX_RGB(0xC0, 0x86, 0x86),
+    },
+    {
+        .name = "VIOLET",
+        .bg = GFX_RGB(0x0C, 0x06, 0x16),
+        .card = GFX_RGB(0x1C, 0x10, 0x30),
+        .card_hi = GFX_RGB(0x2E, 0x1B, 0x4C),
+        .text = GFX_RGB(0xF0, 0xE8, 0xFF),
+        .text_dim = GFX_RGB(0xA8, 0x95, 0xC8),
+        .text_mute = GFX_RGB(0x63, 0x55, 0x8A),
+        .accent = GFX_RGB(0xA8, 0x55, 0xF7),
+        .accent2 = GFX_RGB(0x4C, 0x1D, 0x95),
+        .accent3 = GFX_RGB(0xD8, 0xB4, 0xFE),
+        .amber = GFX_RGB(0xF0, 0xB0, 0x40),
+        .green = GFX_RGB(0x4A, 0xDE, 0x80),
+        .red = GFX_RGB(0xE0, 0x4A, 0x6A),
+    },
+    {
+        /* The second light scheme, and a cool one - PAPER is warm, so between
+         * them they cover both ways a light background can go wrong. */
+        .name = "FROST",
+        .bg = GFX_RGB(0xED, 0xF2, 0xF7),
+        .card = GFX_RGB(0xD8, 0xE2, 0xEC),
+        .card_hi = GFX_RGB(0xB8, 0xC7, 0xD6),
+        .text = GFX_RGB(0x10, 0x20, 0x2E),
+        .text_dim = GFX_RGB(0x44, 0x58, 0x6B),
+        .text_mute = GFX_RGB(0x7A, 0x8C, 0xA0),
+        .accent = GFX_RGB(0x0B, 0x6B, 0xCB),
+        .accent2 = GFX_RGB(0x5A, 0x3F, 0xD0),
+        .accent3 = GFX_RGB(0x00, 0x80, 0x8F),
+        .amber = GFX_RGB(0x9A, 0x64, 0x00),
+        .green = GFX_RGB(0x1F, 0x7A, 0x3D),
+        .red = GFX_RGB(0xB3, 0x26, 0x1E),
+    },
+    {
+        /* Everything here is in the red family, so the low battery warning is
+         * pulled toward crimson while the accent stays orange - they have to be
+         * told apart by hue, because they cannot be told apart by being red. */
+        .name = "EMBER",
+        .bg = GFX_RGB(0x12, 0x04, 0x06),
+        .card = GFX_RGB(0x2A, 0x0C, 0x10),
+        .card_hi = GFX_RGB(0x44, 0x16, 0x1C),
+        .text = GFX_RGB(0xFF, 0xE8, 0xE4),
+        .text_dim = GFX_RGB(0xD0, 0x9A, 0x92),
+        .text_mute = GFX_RGB(0x8A, 0x5A, 0x55),
+        .accent = GFX_RGB(0xFF, 0x6A, 0x2C),
+        .accent2 = GFX_RGB(0x8C, 0x18, 0x10),
+        .accent3 = GFX_RGB(0xFF, 0xB0, 0x80),
+        .amber = GFX_RGB(0xFF, 0xC0, 0x40),
+        .green = GFX_RGB(0x9A, 0xC0, 0x50),
+        .red = GFX_RGB(0xFF, 0x17, 0x44),
+    },
+    {
+        .name = "NEON",
+        .bg = GFX_RGB(0x05, 0x03, 0x0A),
+        .card = GFX_RGB(0x12, 0x0A, 0x22),
+        .card_hi = GFX_RGB(0x1E, 0x10, 0x38),
+        .text = GFX_RGB(0xF2, 0xE9, 0xFF),
+        .text_dim = GFX_RGB(0x9C, 0x8A, 0xCC),
+        .text_mute = GFX_RGB(0x5A, 0x4A, 0x85),
+        .accent = GFX_RGB(0xFF, 0x2B, 0xD6),
+        .accent2 = GFX_RGB(0x7B, 0x2B, 0xFF),
+        .accent3 = GFX_RGB(0x18, 0xF0, 0xFF),
+        .amber = GFX_RGB(0xFF, 0xD0, 0x1A),
+        .green = GFX_RGB(0x1A, 0xFF, 0x9C),
+        .red = GFX_RGB(0xFF, 0x33, 0x55),
+    },
+    {
+        /* Deliberately the gentlest of the set - low contrast, warm, nothing
+         * shouting. AMBER is the hot version of the same hue. */
+        .name = "SEPIA",
+        .bg = GFX_RGB(0x14, 0x10, 0x0A),
+        .card = GFX_RGB(0x27, 0x1F, 0x14),
+        .card_hi = GFX_RGB(0x3E, 0x32, 0x20),
+        .text = GFX_RGB(0xF5, 0xE8, 0xD0),
+        .text_dim = GFX_RGB(0xC0, 0xAA, 0x88),
+        .text_mute = GFX_RGB(0x80, 0x70, 0x5A),
+        .accent = GFX_RGB(0xD9, 0xA2, 0x4A),
+        .accent2 = GFX_RGB(0x8A, 0x6A, 0x32),
+        .accent3 = GFX_RGB(0xF0, 0xD8, 0xA8),
+        .amber = GFX_RGB(0xE8, 0xB8, 0x4A),
+        .green = GFX_RGB(0x9A, 0xAF, 0x5A),
+        .red = GFX_RGB(0xC8, 0x5A, 0x44),
+    },
+    {
+        /* Gold on deep green rather than green on green: an accent the same hue
+         * as the battery indicator would leave the two indistinguishable, which
+         * is the mistake TERMINAL gets away with only because it is monochrome
+         * on purpose. */
+        .name = "FOREST",
+        .bg = GFX_RGB(0x06, 0x10, 0x0A),
+        .card = GFX_RGB(0x10, 0x22, 0x18),
+        .card_hi = GFX_RGB(0x1C, 0x38, 0x26),
+        .text = GFX_RGB(0xEA, 0xF6, 0xEC),
+        .text_dim = GFX_RGB(0x9C, 0xBF, 0xA6),
+        .text_mute = GFX_RGB(0x5C, 0x7A, 0x66),
+        .accent = GFX_RGB(0xE0, 0xA8, 0x3C),
+        .accent2 = GFX_RGB(0x2E, 0x7D, 0x4F),
+        .accent3 = GFX_RGB(0x8F, 0xE0, 0xA8),
+        .amber = GFX_RGB(0xF0, 0xD8, 0x48),
+        .green = GFX_RGB(0x4A, 0xDE, 0x80),
+        .red = GFX_RGB(0xE0, 0x5A, 0x50),
     },
 };
 
