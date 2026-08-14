@@ -456,6 +456,9 @@ static void paint_marquee(void *ud) {
 
   gfx_fill(m->x, m->y, m->w, m->h, COL_BG);
 
+  /* Explicit, because this is also called from the whole-screen repaint where
+   * the flush region is the entire panel and would clip nothing. */
+  gfx_clip(m->x, m->y, m->w, m->h);
   if (m->scrolling) {
     gfx_text((int16_t)(m->x - m->offset), ty, m->font, m->text, fg);
     gfx_text((int16_t)(m->x - m->offset + m->text_w + MARQUEE_GAP), ty, m->font,
@@ -463,6 +466,7 @@ static void paint_marquee(void *ud) {
   } else {
     gfx_text(m->x, ty, m->font, m->text, fg);
   }
+  gfx_clip_reset();
 }
 
 static void marquee_set(marquee_t *m, const char *text, uint32_t now) {
