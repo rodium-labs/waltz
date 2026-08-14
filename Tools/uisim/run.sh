@@ -10,7 +10,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
 out=$(mktemp -d)
 
-cc -O1 -Wall -Wextra -std=gnu11 \
+cc -O1 -Wall -Wextra -std=gnu11 -DUISIM=1 \
   -I"$here" \
   -I"$root/Libs/gfx/Inc" -I"$root/Libs/st7789/Inc" \
   -I"$root/Assets/Icons/Inc" -I"$root/Core/Inc/Ui" -I"$root/Core/Inc" \
@@ -26,6 +26,7 @@ python3 "$here/sheet.py" "$out"/0[1-6]*.ppm "$root/docs/ui-preview.png"
 python3 "$here/sheet.py" "$out"/0[789]*.ppm "$out"/1*.ppm "$root/docs/ui-screens.png"
 python3 "$here/sheet.py" "$out"/05-list.ppm "$out"/10-stats.ppm \
   "$out"/11-settings.ppm "$root/docs/ui-menus.png"
+python3 "$here/sheet.py" "$out"/N0*.ppm "$root/docs/ui-overlays.png"
 python3 "$here/sheet.py" "$out"/T0[0-4]*.ppm "$root/docs/ui-themes-a.png"
 python3 "$here/sheet.py" "$out"/T0[5-9]*.ppm "$root/docs/ui-themes-b.png"
 python3 "$here/sheet.py" "$out"/S0*.ppm "$root/docs/ui-splash.png"
@@ -40,4 +41,5 @@ for f in F1focus F2push F3row F4pop; do
     "$out"/$f-*.ppm "$last" "$last" "$last" "$last" "$last" "$last"
 done
 python3 "$here/gif.py" "$root/docs/anim-F5menu.gif" 3 2 "$out"/F5menu-*.ppm
+python3 "$here/gif.py" "$root/docs/anim-F6spin.gif" 3 9 "$out"/F6spin-*.ppm
 rm -rf "$out"

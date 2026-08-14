@@ -48,23 +48,41 @@ void Settings_Load(void) {}
 bool Settings_Save(void) { return true; }
 void Settings_Autosave(uint32_t now) { (void)now; }
 
-/* power.c reaches for the ADC, so it is faked with a plausible rail. */
+/* power.c reaches for the ADC, so it is faked with a plausible rail. Both are
+ * settable so the scenes can walk the battery down to the warning. */
 #include "power.h"
+static uint8_t sim_battery = 96U;
+static bool sim_battery_sense;
 void Power_Init(void) {}
 void Power_Tick(uint32_t now) { (void)now; }
 uint16_t Power_SupplyMv(void) { return 3287U; }
-uint8_t Power_Percent(void) { return 96U; }
-bool Power_HasBatterySense(void) { return false; }
+uint8_t Power_Percent(void) { return sim_battery; }
+bool Power_HasBatterySense(void) { return sim_battery_sense; }
 
 void st7789_init(void) {}
 void st7789_backlight(uint8_t percent) { (void)percent; }
 void st7789_set_color_mode(bool bgr, bool invert) { (void)bgr; (void)invert; }
 void st7789_gram_probe(void) {}
+void st7789_read_probe(void) {}
+void st7789_sync_calibrate(void) {}
+uint16_t st7789_scanline(void) { return 0U; }
+/* Nothing to sync against on the host. */
+void st7789_wait_vblank(void) {}
 
 void st7789_raw_fill(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1,
                      uint16_t color) {
   (void)x0; (void)y0; (void)x1; (void)y1; (void)color;
 }
+
+/* The real driver overlaps a blit with the next band's drawing; on the host
+ * there is nothing to overlap, so start is the whole transfer and wait is a
+ * no-op. */
+void st7789_blit_start(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
+                       const uint16_t *px) {
+  st7789_blit(x, y, w, h, px);
+}
+
+void st7789_blit_wait(void) {}
 
 void st7789_blit(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
                  const uint16_t *px) {
@@ -94,7 +112,13 @@ void st7789_fill(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
 }
 
 static void dump(const char *path) {
-  FILE *f = fopen(path, "wb");
+  FILE *f;
+
+  /* UISIM_NODUMP=1 turns the run into a pure render benchmark. */
+  if (getenv("UISIM_NODUMP") != NULL) {
+    return;
+  }
+  f = fopen(path, "wb");
   fprintf(f, "P6\n%d %d\n255\n", ST7789_W, ST7789_H);
   for (int i = 0; i < ST7789_W * ST7789_H; ++i) {
     /* pixels are stored in wire order, so undo that before unpacking */
@@ -173,10 +197,18 @@ int main(int argc, char **argv) {
   const char *outdir = (argc > 1) ? argv[1] : ".";
   char path[512];
   int shot = 1;
+  int nshot = 1;
 
 #define SHOT(name)                                                             \
   do {                                                                         \
     snprintf(path, sizeof path, "%s/%02d-%s.ppm", outdir, shot++, name);        \
+    dump(path);                                                                \
+  } while (0)
+
+/* Overlays and states, kept off the screen tour. */
+#define NSHOT(name)                                                            \
+  do {                                                                         \
+    snprintf(path, sizeof path, "%s/N%02d-%s.ppm", outdir, nshot++, name);      \
     dump(path);                                                                \
   } while (0)
 
@@ -295,14 +327,18 @@ int main(int argc, char **argv) {
   }
   run_for(400);
 
-  /* down to the FADE row and cycle it */
+  /* down to the FADE row, into it, and step the value */
   press(INPUT_NEXT);
   press(INPUT_NEXT);
   press(INPUT_NEXT);
-  run_for(100);
-  press(INPUT_PLAY);
+  run_for(300);
+  press(INPUT_PLAY); /* enter the row */
+  run_for(200);
+  press(INPUT_NEXT); /* step the value */
   run_for(200);
   SHOT("settings-fade");
+  press(INPUT_PLAY); /* and back out of it */
+  run_for(200);
 
   /* cycle the play mode with the volume chord, from the settings page */
   press(INPUT_MODE);
@@ -316,6 +352,53 @@ int main(int argc, char **argv) {
   press(INPUT_MENU);
   run_for(200);
   SHOT("home-themed");
+
+  /* Overlays and states get their own sheet - they are not screens you walk
+   * through, so mixing them into the tour reads as a broken navigation. */
+  home_pick(TILE_MUSIC);
+  press(INPUT_PLAY);
+  run_for(500);
+  press(INPUT_VOL_UP);
+  run_for(150);
+  NSHOT("volume");
+  run_for(1200); /* let the card time out */
+
+  /* the record turning, one full revolution */
+  if (!player.playing) {
+    press(INPUT_PLAY);
+    run_for(300);
+  }
+  film(outdir, "F6spin", 32, 90); /* one step of the spin table per frame */
+
+  /* a settings row being edited */
+  home_pick(TILE_SETTINGS);
+  press(INPUT_PLAY);
+  run_for(400);
+  press(INPUT_PLAY); /* into THEME */
+  run_for(250);
+  NSHOT("settings-editing");
+  press(INPUT_MENU); /* out of the value */
+  run_for(200);
+  press(INPUT_MENU); /* out of settings */
+  run_for(400);
+
+  /* the message screen, which nothing reaches until storage is attached */
+  Ui_ShowMessage("NO TRACKS", "nothing on the card");
+  run_for(400);
+  NSHOT("message");
+  press(INPUT_MENU);
+  run_for(400);
+
+  /* low battery: the notice, then the status bar it leaves behind */
+  sim_battery_sense = true;
+  sim_battery = 9U;
+  run_for(150);
+  NSHOT("battery-notice");
+  run_for(2200);
+  NSHOT("battery-low");
+  sim_battery = 96U;
+  sim_battery_sense = false;
+  run_for(300);
 
   printf("final: track %u/%u elapsed %us playing=%d vol=%u batt=%u\n",
          player.index + 1, player.count, player.elapsed_s, player.playing,
