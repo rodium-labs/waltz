@@ -55,6 +55,16 @@ typedef struct {
 /** Level meter refresh interval - it animates on its own. */
 #define UI_METER_MS 50U
 
+/*
+ * The record turns while it plays. 32 steps at 90 ms is a revolution just under
+ * every three seconds - slower than a real 33 rpm platter, because at this size
+ * the point is to say "playing" at a glance, not to be a tachometer. Repainting
+ * the 56x56 cover on that cadence is about 6 kB/s over SPI, which is nothing
+ * next to the backlight.
+ */
+#define ART_SPIN_STEPS 32
+#define UI_ART_MS 90U
+
 /* Screens ----------------------------------------------------------------- */
 
 typedef enum {
@@ -63,6 +73,7 @@ typedef enum {
   UI_LIST,
   UI_SETTINGS,
   UI_STATS,
+  UI_MESSAGE,
 } ui_screen_t;
 
 /** Home tiles, in screen order. */
@@ -179,6 +190,108 @@ static bool bar_dirty;
 static bool page_dirty;
 static uint16_t pending;
 static uint32_t meter_at;
+static uint32_t art_at;
+static uint8_t art_spin;
+
+/* Frame timing ------------------------------------------------------------ */
+
+#if UI_FRAME_TIMING
+volatile uint32_t ui_frame_us;
+volatile uint32_t ui_frame_us_max;
+volatile uint32_t ui_frames;
+volatile uint32_t ui_paint_us;
+volatile uint32_t ui_work_us;
+volatile uint32_t ui_work_us_max;
+
+/** Cycles per microsecond. SystemCoreClock is 84 MHz here. */
+#define CPU_MHZ 84U
+
+static void frame_timer_init(void) {
+  CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+  DWT->CYCCNT = 0U;
+  DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+}
+
+static uint32_t frame_begin(void) {
+  ui_paint_us = 0U;
+  return DWT->CYCCNT;
+}
+
+/*
+ * Wraps a painter so the cycles it spends land in ui_paint_us. Whatever the
+ * repaint cost beyond that is the panel transfer, which is the number that
+ * decides whether more optimising is worth anything.
+ */
+static gfx_paint_fn timed_inner;
+
+static void paint_timed(void *ud) {
+  uint32_t t0 = DWT->CYCCNT;
+
+  timed_inner(ud);
+  ui_paint_us += (DWT->CYCCNT - t0) / CPU_MHZ;
+}
+
+static void frame_end(uint32_t started) {
+  uint32_t us = (DWT->CYCCNT - started) / CPU_MHZ;
+  /* Sitting waiting for the panel is not work, and mixing the two hides the
+   * number that actually decides whether a frame tears. */
+  uint32_t work = (us > st7789_vsync_last_us) ? (us - st7789_vsync_last_us) : us;
+
+  ui_frame_us = us;
+  ui_work_us = work;
+  if (us > ui_frame_us_max) {
+    ui_frame_us_max = us;
+  }
+  if (work > ui_work_us_max) {
+    ui_work_us_max = work;
+  }
+  ui_frames++;
+}
+#else
+/* Timing off: the shim still stands in so the call sites stay identical. */
+static gfx_paint_fn timed_inner;
+
+static void paint_timed(void *ud) { timed_inner(ud); }
+
+#define frame_timer_init() ((void)0)
+#define frame_begin() 0U
+#define frame_end(started) ((void)(started))
+#endif
+
+/* Overlays ---------------------------------------------------------------- */
+
+/*
+ * A card over the content area that takes the screen back when it expires.
+ * Volume used to change with no feedback but a six pixel number in the corner
+ * of the status bar, which is not where anyone is looking.
+ */
+typedef enum { HUD_NONE = 0, HUD_VOLUME, HUD_NOTICE } hud_kind_t;
+
+#define HUD_MS 1000U
+
+static hud_kind_t hud_kind;
+static uint32_t hud_until;
+static bool hud_dirty;
+static const char *hud_line;
+
+/** Held by the message screen. Both point at literals, so nothing is copied. */
+static const char *msg_title;
+static const char *msg_detail;
+
+/** Below this the battery reads as a warning rather than a level. */
+#define BATTERY_LOW_PCT 15U
+
+/** Latched so the low battery notice fires once per discharge, not per tick. */
+static bool battery_warned;
+
+/* Settings editing -------------------------------------------------------- */
+
+/*
+ * PLAY used to cycle a value forwards in place, which is fine for an on/off row
+ * and miserable for THEME - ten schemes, no way back. Now PLAY enters the row,
+ * PREV/NEXT step the value either way, and PLAY or MENU leaves it.
+ */
+static bool set_editing;
 
 /* Screen blanking --------------------------------------------------------- */
 
@@ -384,11 +497,15 @@ static void draw_repeat(int16_t x, int16_t y, int16_t w, int16_t h,
  * a gap all the way round instead of touching the case.
  */
 static void draw_battery(int16_t x, int16_t y, uint8_t pct) {
-  uint16_t c = (pct <= 15U) ? COL_RED : ((pct <= 35U) ? COL_AMBER : COL_GREEN);
+  bool low = (pct <= BATTERY_LOW_PCT);
+  uint16_t c = low ? COL_RED : ((pct <= 35U) ? COL_AMBER : COL_GREEN);
   int16_t fill = (int16_t)(((int32_t)12 * pct + 50) / 100);
 
-  gfx_rrect_ring(x, y, 16, 9, 3, 1, COL_TEXT_DIM);
-  gfx_rrect((int16_t)(x + 16), (int16_t)(y + 3), 2, 3, 1, COL_TEXT_MUTE);
+  /* When it is nearly flat the case goes red too. A 2 px sliver of red inside a
+   * grey outline is easy to walk past; a red battery is not. */
+  gfx_rrect_ring(x, y, 16, 9, 3, 1, low ? c : COL_TEXT_DIM);
+  gfx_rrect((int16_t)(x + 16), (int16_t)(y + 3), 2, 3, 1,
+            low ? c : COL_TEXT_MUTE);
   if (fill > 0) {
     gfx_rrect((int16_t)(x + 2), (int16_t)(y + 2), fill, 5, 1, c);
   }
@@ -418,7 +535,7 @@ static void bar_title(char *out) {
   case UI_STATS:
     strcpy(out, "STATS");
     return;
-  default:
+  default: /* UI_HOME and UI_MESSAGE */
     strcpy(out, "WALTZ");
     return;
   }
@@ -593,10 +710,29 @@ static void marquee_render(marquee_t *m) {
 
 /* Player screen ----------------------------------------------------------- */
 
+/*
+ * cos * 64 at 32 steps around the circle. sin is the same table a quarter turn
+ * back, so one table of 32 bytes turns the record.
+ */
+static const int8_t circ_cos[ART_SPIN_STEPS] = {
+    64,  63,  59,  53,  45,  36,  24,  12,  0,   -12, -24,
+    -36, -45, -53, -59, -63, -64, -63, -59, -53, -45, -36,
+    -24, -12, 0,   12,  24,  36,  45,  53,  59,  63};
+
+static int16_t spin_x(int16_t cx, uint8_t step, int16_t r) {
+  return (int16_t)(cx + ((int32_t)r * circ_cos[step & (ART_SPIN_STEPS - 1)]) / 64);
+}
+
+static int16_t spin_y(int16_t cy, uint8_t step, int16_t r) {
+  return spin_x(cy, (uint8_t)(step + 24U), r);
+}
+
 static void paint_art(void *ud) {
   const track_t *t = Player_Track();
   const int16_t cx = (int16_t)(ART_X + ART_SIZE / 2);
   const int16_t cy = (int16_t)(ART_Y + ART_SIZE / 2);
+  /* Parked while paused, so a still screen stays still. */
+  const uint8_t step = (uint8_t)(art_spin & (ART_SPIN_STEPS - 1));
   int16_t r;
 
   (void)ud;
@@ -606,10 +742,15 @@ static void paint_art(void *ud) {
                  t->art_bottom);
 
   gfx_disc(cx, cy, 21, GFX_RGB(0x0E, 0x0E, 0x14));
-  gfx_ring(cx, cy, 21, 20, gfx_mix(t->art_top, COL_TEXT, 90));
+  gfx_circle(cx, cy, 21, gfx_mix(t->art_top, COL_TEXT, 90));
   for (r = 18; r >= 11; r = (int16_t)(r - 3)) {
-    gfx_ring(cx, cy, r, (int16_t)(r - 1), GFX_RGB(0x24, 0x24, 0x30));
+    gfx_circle(cx, cy, r, GFX_RGB(0x24, 0x24, 0x30));
   }
+
+  /* One sweep of light across the grooves is all it takes to read as turning,
+   * and it borrows the cover's colour so it looks lit rather than drawn on. */
+  gfx_line(spin_x(cx, step, 9), spin_y(cy, step, 9), spin_x(cx, step, 20),
+           spin_y(cy, step, 20), gfx_mix(t->art_top, COL_TEXT, 60));
 
   gfx_disc(cx, cy, 8, t->art_label);
   gfx_bitmap((int16_t)(cx - 3), (int16_t)(cy - 4), 7, 9, icon_note,
@@ -1146,6 +1287,71 @@ void Ui_Splash(void) {
   HAL_Delay(1400);
 }
 
+/* Overlays ---------------------------------------------------------------- */
+
+static void paint_hud(void *ud) {
+  const int16_t iy = (int16_t)(HUD_Y + (HUD_H - 9) / 2);
+  char value[8];
+  char *p;
+
+  (void)ud;
+  paint_backdrop(HUD_X, HUD_Y, HUD_W, HUD_H);
+  glass_panel(HUD_X, HUD_Y, HUD_W, HUD_H, 10, 46, COL_TEXT);
+
+  if (hud_kind == HUD_NOTICE) {
+    gfx_text(center_in(HUD_X, HUD_W, &Font_Mono6x8, hud_line),
+             (int16_t)(HUD_Y + (HUD_H - 8) / 2), &Font_Mono6x8, hud_line,
+             COL_TEXT);
+    return;
+  }
+
+  p = put_u16(value, player.volume, 1);
+  *p++ = '%';
+  *p = '\0';
+
+  gfx_bitmap((int16_t)(HUD_X + 12), iy, 10, 9, icon_speaker, COL_TEXT);
+
+  {
+    /* The track runs from the speaker to the readout, so the number never has
+     * to move as the fill grows. */
+    const int16_t tx = (int16_t)(HUD_X + 28);
+    const int16_t tw = (int16_t)(HUD_W - 28 - 34);
+    const int16_t ty = (int16_t)(HUD_Y + (HUD_H - 4) / 2);
+    int16_t fw = (int16_t)(((int32_t)tw * player.volume) / 100);
+
+    gfx_rrect(tx, ty, tw, 4, 2, gfx_mix(COL_BG, COL_CARD_HI, 220));
+    if (fw > 0) {
+      gfx_rrect(tx, ty, fw, 4, 2, COL_ACCENT);
+    }
+  }
+
+  gfx_text(right_to((int16_t)(HUD_X + HUD_W - 12), &Font_Mono6x8, value),
+           (int16_t)(HUD_Y + (HUD_H - 8) / 2), &Font_Mono6x8, value, COL_TEXT);
+}
+
+/*
+ * The message screen. Nothing reaches it yet with the playlist mocked, but the
+ * moment a card is involved there are three ways to end up with no music and no
+ * explanation, so it exists as a screen rather than an afterthought.
+ */
+static void paint_message(void *ud) {
+  const int16_t cx = (int16_t)(MSG_X + 20);
+  const int16_t cy = (int16_t)(MSG_Y + MSG_H / 2);
+
+  (void)ud;
+  paint_backdrop(0, CONTENT_Y, GFX_W, CONTENT_H);
+  glass_panel(MSG_X, MSG_Y, MSG_W, MSG_H, 12, 44, COL_TEXT);
+
+  gfx_circle(cx, cy, 9, COL_AMBER);
+  gfx_vline(cx, (int16_t)(cy - 5), 6, COL_AMBER);
+  gfx_pixel(cx, (int16_t)(cy + 3), COL_AMBER);
+
+  gfx_text((int16_t)(MSG_X + 38), (int16_t)(MSG_Y + 12), &Font_Mono7x10,
+           msg_title, COL_TEXT);
+  gfx_text((int16_t)(MSG_X + 38), (int16_t)(MSG_Y + 26), &Font_Mono6x8,
+           msg_detail, COL_TEXT_MUTE);
+}
+
 /* Whole-screen painters --------------------------------------------------- */
 
 /*
@@ -1176,6 +1382,8 @@ static void paint_screen_content(ui_screen_t which) {
     paint_home(NULL);
   } else if (which == UI_NOW) {
     paint_player_all(NULL);
+  } else if (which == UI_MESSAGE) {
+    paint_message(NULL);
   } else {
     paint_menu((void *)active_menu());
   }
@@ -1332,6 +1540,15 @@ static void maybe_blank(uint32_t now) {
 
 /* Input ------------------------------------------------------------------- */
 
+/** Volume behaves the same on every screen, and everywhere it raises the card. */
+static void volume_step(int8_t delta, uint32_t now) {
+  Player_VolumeStep(delta);
+  bar_dirty = true;
+  hud_kind = HUD_VOLUME;
+  hud_until = now + HUD_MS;
+  hud_dirty = true;
+}
+
 static void handle_input(uint32_t now) {
   input_event_t e;
 
@@ -1369,11 +1586,9 @@ static void handle_input(uint32_t now) {
       } else if (e == INPUT_PLAY) {
         home_activate();
       } else if (e == INPUT_VOL_DOWN) {
-        Player_VolumeStep(-2);
-        bar_dirty = true;
+        volume_step(-2, now);
       } else if (e == INPUT_VOL_UP) {
-        Player_VolumeStep(2);
-        bar_dirty = true;
+        volume_step(2, now);
       }
       break;
 
@@ -1500,10 +1715,15 @@ void Ui_Init(void) {
   stat_top = 0;
   last_input_at = now;
   asleep = false;
+  frame_timer_init();
 
   /* Boot lands on the home screen with nothing playing. */
   enter_home();
   ui_ready = true;
+}
+
+void Ui_ShowMessage(const char *title, const char *detail) {
+  enter_message(title, detail);
 }
 
 void Ui_Tick(uint32_t now) {
@@ -1517,7 +1737,27 @@ void Ui_Tick(uint32_t now) {
     return;
   }
 
+  /* Everything drawn from here on belongs to one frame, so line that frame up
+   * with the panel's scanout. Costs nothing on a tick that draws nothing - the
+   * flag simply waits for whichever flush comes first. */
+  gfx_sync_next();
+
   player.battery = Power_Percent();
+
+  /* Latched, so it says its piece once per discharge rather than every tick.
+   * The hysteresis band stops a reading sitting on the threshold retriggering
+   * it - the supply sags under load and recovers when the backlight dips. */
+  if (Power_HasBatterySense()) {
+    if (!battery_warned && player.battery <= BATTERY_LOW_PCT) {
+      battery_warned = true;
+      hud_kind = HUD_NOTICE;
+      hud_line = "BATTERY LOW";
+      hud_until = now + HUD_MS * 2U;
+      hud_dirty = true;
+    } else if (battery_warned && player.battery > BATTERY_LOW_PCT + 8U) {
+      battery_warned = false;
+    }
+  }
 
   if (shown.battery != player.battery || shown.volume != player.volume ||
       shown.playing != player.playing || shown.shuffle != player.shuffle ||
@@ -1534,8 +1774,10 @@ void Ui_Tick(uint32_t now) {
   if (slide.active) {
     uint32_t elapsed = now - slide.start;
     uint16_t p = ease_out(elapsed, ANIM_SCREEN_MS);
+    uint32_t t0 = frame_begin();
 
     gfx_flush(0, CONTENT_Y, GFX_W, CONTENT_H, paint_slide, &p);
+    frame_end(t0);
     if (elapsed >= ANIM_SCREEN_MS) {
       slide.active = false;
       page_dirty = true;
@@ -1547,14 +1789,46 @@ void Ui_Tick(uint32_t now) {
     return;
   }
 
+  /* The card owns the content area while it is up. When it expires the screen
+   * underneath is repainted whole, because nothing recorded what it covered. */
+  if (hud_kind != HUD_NONE) {
+    if ((int32_t)(now - hud_until) < 0) {
+      if (hud_dirty) {
+        gfx_flush(HUD_X, HUD_Y, HUD_W, HUD_H, paint_hud, NULL);
+        hud_dirty = false;
+      }
+      latch();
+      return;
+    }
+    hud_kind = HUD_NONE;
+    page_dirty = true;
+    pending = D_ALL;
+    title_mq.dirty = true;
+    artist_mq.dirty = true;
+  }
+
   /* A selection or focus move is mid-flight; keep the page coming. */
   if ((int32_t)(now - page_anim_until) < 0) {
     page_dirty = true;
   }
 
+  if (screen == UI_MESSAGE) {
+    if (page_dirty) {
+      gfx_flush(0, CONTENT_Y, GFX_W, CONTENT_H, paint_message, NULL);
+      page_dirty = false;
+    }
+    latch();
+    return;
+  }
+
   if (screen == UI_HOME) {
     if (page_dirty) {
-      gfx_flush(0, CONTENT_Y, GFX_W, CONTENT_H, paint_home, NULL);
+      uint32_t t0;
+
+      timed_inner = paint_home;
+      t0 = frame_begin();
+      gfx_flush(0, CONTENT_Y, GFX_W, CONTENT_H, paint_timed, NULL);
+      frame_end(t0);
       page_dirty = false;
     }
     latch();
@@ -1573,8 +1847,13 @@ void Ui_Tick(uint32_t now) {
       page_dirty = true;
     }
     if (page_dirty) {
-      gfx_flush(0, CONTENT_Y, GFX_W, CONTENT_H, paint_menu,
+      uint32_t t0;
+
+      timed_inner = paint_menu;
+      t0 = frame_begin();
+      gfx_flush(0, CONTENT_Y, GFX_W, CONTENT_H, paint_timed,
                 (void *)active_menu());
+      frame_end(t0);
       page_dirty = false;
     }
     latch();
@@ -1602,6 +1881,12 @@ void Ui_Tick(uint32_t now) {
   if (now - meter_at >= UI_METER_MS) {
     meter_at = now;
     dirty |= D_METER;
+  }
+  /* The platter only turns while there is something to turn for. */
+  if (player.playing && now - art_at >= UI_ART_MS) {
+    art_at = now;
+    art_spin++;
+    dirty |= D_ART;
   }
 
   if (dirty & D_ART) {

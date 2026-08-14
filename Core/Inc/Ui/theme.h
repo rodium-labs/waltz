@@ -6,13 +6,15 @@
  * nine rows of them tall. So the screen is three columns rather than the stack
  * a portrait bar wants:
  *
+ *   +-------------------------------------------------------+
+ *   | shuf rep      NOW PLAYING 3/5       vol      battery  |
  *   +--------+---------------------------+------------------+
- *   |        | title                     | clock   battery  |
+ *   |        | title                     | prev play next   |
  *   | cover  | artist                    |                  |
  *   | 64x64  | progress                  | level meter      |
- *   |        | 1:23              4:05    |                  |
- *   |        | shuf prev play next rep   | volume           |
- *   +--------+---------------------------+ bitrate    3/5   |
+ *   |        | 0:12              4:05    |                  |
+ *   |        | 320 kbps                  |                  |
+ *   +--------+---------------------------+------------------+
  *
  * Each block is an independent redraw region, so only the ones whose data
  * changed get repainted - that is what keeps the banded renderer cheap.
@@ -139,7 +141,7 @@ void Theme_Next(void);
 #define METER_X (RIGHT_X + (RIGHT_W - (SPECTRUM_BARS * (METER_BAR_W + METER_GAP) - METER_GAP)) / 2)
 #define METER_MAX_H 28
 
-/* Home screen - three tiles ----------------------------------------------- */
+/* Home screen - four tiles ------------------------------------------------ */
 
 /* Four tiles: 4 * 62 + 3 * 8 gutters + 6 px margins = 284. */
 #define HOME_TILES 4
@@ -155,5 +157,30 @@ void Theme_Next(void);
 #define MENU_Y (CONTENT_Y + 2)
 #define MENU_ROW_H 12
 #define MENU_ROWS ((GFX_H - MENU_Y) / MENU_ROW_H)
+
+/*
+ * A lane on the right belongs to the scroll rail. It is reserved whether or not
+ * the list is long enough to need one, so rows do not shift when it appears.
+ */
+#define MENU_RAIL_W 2
+#define MENU_RAIL_X (GFX_W - 4)
+#define MENU_PILL_X 2
+#define MENU_PILL_W (GFX_W - 9)
+#define MENU_TEXT_X 6
+#define MENU_TEXT_RIGHT (GFX_W - 10)
+
+/* Overlays - volume, notices, messages ------------------------------------ */
+
+/** Volume and notice card, centred in the content area. */
+#define HUD_W 168
+#define HUD_H 34
+#define HUD_X ((GFX_W - HUD_W) / 2)
+#define HUD_Y (CONTENT_Y + (CONTENT_H - HUD_H) / 2)
+
+/** Message screen card - no card, no tracks, and whatever else goes wrong. */
+#define MSG_W 208
+#define MSG_H 46
+#define MSG_X ((GFX_W - MSG_W) / 2)
+#define MSG_Y (CONTENT_Y + (CONTENT_H - MSG_H) / 2)
 
 #endif /* __THEME_H__ */

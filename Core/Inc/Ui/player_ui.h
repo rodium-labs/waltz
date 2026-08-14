@@ -16,6 +16,32 @@
 #define UI_PANEL_CHECK 0
 
 /**
+ * Set to 1 to time content repaints with the Cortex-M4 cycle counter.
+ *
+ * There is no console on this board, so the numbers are left in RAM for the
+ * debugger to read:
+ *
+ *   STM32_Programmer_CLI -c port=SWD -r32 <&ui_frame_us> 3
+ *
+ * gives the last repaint, the worst one seen, and how many have been done.
+ * Costs two register reads per repaint, so it can stay on.
+ */
+#if defined(UISIM)
+#define UI_FRAME_TIMING 0 /* the host has no cycle counter to read */
+#else
+#define UI_FRAME_TIMING 1
+#endif
+
+#if UI_FRAME_TIMING
+extern volatile uint32_t ui_frame_us;     /**< last content repaint */
+extern volatile uint32_t ui_frame_us_max; /**< worst since boot */
+extern volatile uint32_t ui_frames;       /**< how many have been timed */
+extern volatile uint32_t ui_paint_us;     /**< of the last one, time spent drawing */
+extern volatile uint32_t ui_work_us;      /**< the last repaint, less the vsync wait */
+extern volatile uint32_t ui_work_us_max;  /**< the number that has to beat the scan */
+#endif
+
+/**
  * @brief Four labelled colour bands, held for three seconds.
  *
  * Runs the backlight at 50 %, which lights the panel whichever way round BLK
@@ -57,5 +83,14 @@ void Ui_Init(void);
 
 /** Repaint whatever changed since the last call. @p now is HAL_GetTick(). */
 void Ui_Tick(uint32_t now);
+
+/**
+ * @brief Take over the screen with a message card until a button clears it.
+ *
+ * For the things that leave nothing to play: no card, no readable tracks, a
+ * decoder that gave up. Both strings must outlive the call - point them at
+ * literals, nothing is copied.
+ */
+void Ui_ShowMessage(const char *title, const char *detail);
 
 #endif /* __PLAYER_UI_H__ */
