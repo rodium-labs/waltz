@@ -46,24 +46,58 @@ static inline uint8_t quant(int16_t v, int16_t bias, uint8_t levels) {
   return (uint8_t)(((int32_t)t * levels + 127) / 255);
 }
 
-/** Write one row of a gradient, dithering the 8-bit channels down to 5/6/5. */
-static void span_dither(int16_t x, int16_t y, int16_t w, int16_t r8,
-                        int16_t g8, int16_t b8) {
+/** The four pixels a dithered row repeats, for one colour on one row. */
+static void pattern_for(int16_t y, int16_t r8, int16_t g8, int16_t b8,
+                        uint16_t *pat) {
+  uint8_t k;
+
+  /*
+   * The colour is constant along the row and the threshold only depends on
+   * x & 3, so the span is four pixels repeating. Working them out once turns
+   * the inner loop from six integer divisions per pixel into an indexed store,
+   * which is the difference between this costing something and costing nothing.
+   */
+  for (k = 0U; k < 4U; ++k) {
+    int16_t d = (int16_t)bayer4[((y & 3) << 2) | k];
+
+    pat[k] = GFX_PACK(quant(r8, (int16_t)((d - 8) / 2), 31U),
+                      quant(g8, (int16_t)((d - 8) / 4), 63U),
+                      quant(b8, (int16_t)((d - 8) / 2), 31U));
+  }
+}
+
+/** Lay a four pixel pattern across a row of the band. */
+static void span_pat(int16_t x, int16_t y, int16_t w, const uint16_t *pat) {
   int16_t x0 = max16(max16(x, band_x), clip_x0);
   int16_t x1 = min16(min16((int16_t)(x + w), (int16_t)(band_x + band_w)), clip_x1);
+  uint16_t *row;
   int16_t xx;
 
   if (y < band_y || y >= band_y + band_h || y < clip_y0 || y >= clip_y1) {
     return;
   }
-  for (xx = x0; xx < x1; ++xx) {
-    int16_t d = (int16_t)bayer4[((y & 3) << 2) | (xx & 3)];
-    uint8_t r = quant(r8, (int16_t)((d - 8) / 2), 31U);
-    uint8_t g = quant(g8, (int16_t)((d - 8) / 4), 63U);
-    uint8_t b = quant(b8, (int16_t)((d - 8) / 2), 31U);
 
-    band[(y - band_y) * band_w + (xx - band_x)] = GFX_PACK(r, g, b);
+  row = &band[(y - band_y) * band_w];
+  if (pat[0] == pat[1] && pat[0] == pat[2] && pat[0] == pat[3]) {
+    /* The colour landed on a representable value, so there is nothing to
+     * dither and the row is a plain fill. */
+    for (xx = x0; xx < x1; ++xx) {
+      row[xx - band_x] = pat[0];
+    }
+    return;
   }
+  for (xx = x0; xx < x1; ++xx) {
+    row[xx - band_x] = pat[xx & 3];
+  }
+}
+
+/** Write one row of a gradient, dithering the 8-bit channels down to 5/6/5. */
+static void span_dither(int16_t x, int16_t y, int16_t w, int16_t r8,
+                        int16_t g8, int16_t b8) {
+  uint16_t pat[4];
+
+  pattern_for(y, r8, g8, b8, pat);
+  span_pat(x, y, w, pat);
 }
 
 /** Channel values of a packed pixel, widened back to 8 bits. */
@@ -73,16 +107,112 @@ static void unpack8(uint16_t c, int16_t *r, int16_t *g, int16_t *b) {
   *b = (int16_t)((GFX_GET_B(c) * 255U) / 31U);
 }
 
-/** Interpolate the 8-bit channels of two packed pixels. */
-static void blend8(uint16_t a, uint16_t b, uint8_t t, int16_t *r, int16_t *g,
-                   int16_t *bl) {
-  int16_t ar, ag, ab, br, bg, bb;
+/** One channel, @p a to @p b by @p t 255ths. */
+static inline int16_t lerp8(int16_t a, int16_t b, uint8_t t) {
+  return (int16_t)(a + (((int32_t)(b - a) * t) / 255));
+}
 
-  unpack8(a, &ar, &ag, &ab);
-  unpack8(b, &br, &bg, &bb);
-  *r = (int16_t)(ar + (((int32_t)(br - ar) * t) / 255));
-  *g = (int16_t)(ag + (((int32_t)(bg - ag) * t) / 255));
-  *bl = (int16_t)(ab + (((int32_t)(bb - ab) * t) / 255));
+/**
+ * The two ends of a gradient, unpacked once.
+ *
+ * Unpacking used to happen per row, which is six divisions a row for two
+ * colours that never change. It did not matter while bands were full width and
+ * a gradient was a handful of rows; with narrow bands the same rows are walked
+ * once per band and it started to show.
+ */
+typedef struct {
+  int16_t r0, g0, b0;
+  int16_t r1, g1, b1;
+} grad_t;
+
+static void grad_ends(grad_t *e, uint16_t top, uint16_t bottom) {
+  unpack8(top, &e->r0, &e->g0, &e->b0);
+  unpack8(bottom, &e->r1, &e->g1, &e->b1);
+}
+
+static void grad_row(const grad_t *e, uint8_t t, int16_t *r, int16_t *g,
+                     int16_t *b) {
+  *r = lerp8(e->r0, e->r1, t);
+  *g = lerp8(e->g0, e->g1, t);
+  *b = lerp8(e->b0, e->b1, t);
+}
+
+/**
+ * True when nothing between @p x and x+w can land in this band.
+ *
+ * Bands are narrow columns, so most of what a paint function draws misses most
+ * of them. Without this each primitive still walks its whole geometry per band
+ * writing nothing, which is what turned a nine band frame into four times the
+ * drawing of a one band frame.
+ */
+static inline bool band_skips_x(int16_t x, int16_t w) {
+  int16_t right = (int16_t)(x + w);
+
+  return (x >= (int16_t)(band_x + band_w)) || (right <= band_x) ||
+         (x >= clip_x1) || (right <= clip_x0);
+}
+
+/*
+ * Gradient rows, remembered.
+ *
+ * A row costs a colour interpolation and four quantisations, and with narrow
+ * bands the same rows get worked out once per band - five times over for
+ * anything full width. They are worked out again for every panel that happens
+ * to share a colour pair, which on the home screen is four of the five tiles.
+ *
+ * The key is the gradient itself, so an entry can never go stale: the same four
+ * numbers always describe the same rows. A hit turns a row into a table read.
+ */
+#define GRAD_SLOTS 4
+
+typedef struct {
+  uint16_t top, bottom;
+  int16_t y, h;
+  bool valid;
+  uint16_t pat[GFX_H][4];
+} grad_cache_t;
+
+static grad_cache_t grad_cache[GRAD_SLOTS];
+static uint8_t grad_next;
+
+static grad_cache_t *grad_rows(int16_t y, int16_t h, uint16_t top,
+                               uint16_t bottom) {
+  grad_cache_t *c;
+  grad_t ends;
+  int16_t yy;
+  uint8_t i;
+
+  if (h <= 1 || h > GFX_H) {
+    return NULL; /* will not fit the table - the caller falls back */
+  }
+
+  for (i = 0U; i < GRAD_SLOTS; ++i) {
+    c = &grad_cache[i];
+    if (c->valid && c->top == top && c->bottom == bottom && c->y == y &&
+        c->h == h) {
+      return c;
+    }
+  }
+
+  /* Round robin. Everything drawn in one frame that matters is in flight at
+   * once, so age is as good a choice as any and costs nothing to track. */
+  c = &grad_cache[grad_next];
+  grad_next = (uint8_t)((grad_next + 1U) % GRAD_SLOTS);
+
+  c->top = top;
+  c->bottom = bottom;
+  c->y = y;
+  c->h = h;
+  grad_ends(&ends, top, bottom);
+  for (yy = 0; yy < h; ++yy) {
+    uint8_t t = (uint8_t)(((int32_t)yy * 255) / (h - 1));
+    int16_t r, g, b;
+
+    grad_row(&ends, t, &r, &g, &b);
+    pattern_for((int16_t)(y + yy), r, g, b, c->pat[yy]);
+  }
+  c->valid = true;
+  return c;
 }
 
 /** Integer square root, enough range for the radii used here. */
@@ -169,6 +299,10 @@ void gfx_clear(uint16_t color) { st7789_fill(0, 0, GFX_W, GFX_H, color); }
 /* Primitives -------------------------------------------------------------- */
 
 void gfx_fill(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {
+  if (band_skips_x(x, w)) {
+    return;
+  }
+
   int16_t x0 = max16(max16(x, band_x), clip_x0);
   int16_t y0 = max16(max16(y, band_y), clip_y0);
   int16_t x1 = min16(min16((int16_t)(x + w), (int16_t)(band_x + band_w)), clip_x1);
@@ -204,11 +338,17 @@ void gfx_vline(int16_t x, int16_t y, int16_t h, uint16_t color) {
 }
 
 void gfx_line(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint16_t color) {
+  int16_t lo = (x0 < x1) ? x0 : x1;
+  int16_t hi = (x0 < x1) ? x1 : x0;
   int16_t dx = (int16_t)(x1 > x0 ? x1 - x0 : x0 - x1);
   int16_t dy = (int16_t)(y1 > y0 ? y1 - y0 : y0 - y1);
   int16_t sx = (int16_t)(x0 < x1 ? 1 : -1);
   int16_t sy = (int16_t)(y0 < y1 ? 1 : -1);
   int16_t err = (int16_t)(dx - dy);
+
+  if (band_skips_x(lo, (int16_t)(hi - lo + 1))) {
+    return;
+  }
 
   for (;;) {
     gfx_pixel(x0, y0, color);
@@ -229,6 +369,12 @@ void gfx_line(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint16_t color) {
 
 void gfx_vgrad(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t top,
                uint16_t bottom) {
+  grad_cache_t *rows;
+  grad_t ends;
+  if (band_skips_x(x, w)) {
+    return;
+  }
+
   int16_t y0 = max16(y, band_y);
   int16_t y1 = min16((int16_t)(y + h), (int16_t)(band_y + band_h));
   int16_t yy;
@@ -237,11 +383,21 @@ void gfx_vgrad(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t top,
     gfx_fill(x, y, w, h, top);
     return;
   }
+
+  rows = grad_rows(y, h, top, bottom);
+  if (rows != NULL) {
+    for (yy = y0; yy < y1; ++yy) {
+      span_pat(x, yy, w, rows->pat[yy - y]);
+    }
+    return;
+  }
+
+  grad_ends(&ends, top, bottom);
   for (yy = y0; yy < y1; ++yy) {
     uint8_t t = (uint8_t)(((int32_t)(yy - y) * 255) / (h - 1));
     int16_t r, g, b;
 
-    blend8(top, bottom, t, &r, &g, &b);
+    grad_row(&ends, t, &r, &g, &b);
     span_dither(x, yy, w, r, g, b);
   }
 }
@@ -268,6 +424,12 @@ void gfx_rrect(int16_t x, int16_t y, int16_t w, int16_t h, int16_t r,
 
 void gfx_rrect_grad(int16_t x, int16_t y, int16_t w, int16_t h, int16_t r,
                     uint16_t top, uint16_t bottom) {
+  grad_cache_t *rows = NULL;
+  grad_t ends;
+  if (band_skips_x(x, w)) {
+    return;
+  }
+
   int16_t y0 = max16(y, band_y);
   int16_t y1 = min16((int16_t)(y + h), (int16_t)(band_y + band_h));
   int16_t yy;
@@ -278,16 +440,28 @@ void gfx_rrect_grad(int16_t x, int16_t y, int16_t w, int16_t h, int16_t r,
   if (r * 2 > h) {
     r = (int16_t)(h / 2);
   }
+  if (h > 1 && top != bottom) {
+    rows = grad_rows(y, h, top, bottom);
+    if (rows == NULL) {
+      grad_ends(&ends, top, bottom);
+    }
+  }
   for (yy = y0; yy < y1; ++yy) {
     int16_t inset = rrect_inset(yy, y, h, r);
 
     if (h > 1 && top != bottom) {
-      uint8_t t = (uint8_t)(((int32_t)(yy - y) * 255) / (h - 1));
-      int16_t cr, cg, cb;
+      int16_t sx = (int16_t)(x + inset);
+      int16_t sw = (int16_t)(w - 2 * inset);
 
-      blend8(top, bottom, t, &cr, &cg, &cb);
-      span_dither((int16_t)(x + inset), yy, (int16_t)(w - 2 * inset), cr, cg,
-                  cb);
+      if (rows != NULL) {
+        span_pat(sx, yy, sw, rows->pat[yy - y]);
+      } else {
+        uint8_t t = (uint8_t)(((int32_t)(yy - y) * 255) / (h - 1));
+        int16_t cr, cg, cb;
+
+        grad_row(&ends, t, &cr, &cg, &cb);
+        span_dither(sx, yy, sw, cr, cg, cb);
+      }
     } else {
       gfx_fill((int16_t)(x + inset), yy, (int16_t)(w - 2 * inset), 1, top);
     }
@@ -317,6 +491,10 @@ static int16_t half_chord(int16_t r, int16_t dy) {
 
 void gfx_rrect_ring(int16_t x, int16_t y, int16_t w, int16_t h, int16_t r,
                     int16_t t, uint16_t color) {
+  if (band_skips_x(x, w)) {
+    return;
+  }
+
   int16_t y0 = max16(y, band_y);
   int16_t y1 = min16((int16_t)(y + h), (int16_t)(band_y + band_h));
   int16_t ir;
@@ -347,6 +525,10 @@ void gfx_rrect_ring(int16_t x, int16_t y, int16_t w, int16_t h, int16_t r,
 }
 
 void gfx_disc(int16_t cx, int16_t cy, int16_t r, uint16_t color) {
+  if (band_skips_x((int16_t)(cx - r), (int16_t)(2 * r + 1))) {
+    return;
+  }
+
   int16_t y0 = max16((int16_t)(cy - r), band_y);
   int16_t y1 = min16((int16_t)(cy + r + 1), (int16_t)(band_y + band_h));
   int16_t yy;
@@ -359,6 +541,10 @@ void gfx_disc(int16_t cx, int16_t cy, int16_t r, uint16_t color) {
 
 void gfx_ring(int16_t cx, int16_t cy, int16_t r_out, int16_t r_in,
               uint16_t color) {
+  if (band_skips_x((int16_t)(cx - r_out), (int16_t)(2 * r_out + 1))) {
+    return;
+  }
+
   int16_t y0 = max16((int16_t)(cy - r_out), band_y);
   int16_t y1 = min16((int16_t)(cy + r_out + 1), (int16_t)(band_y + band_h));
   int16_t yy;
@@ -410,6 +596,10 @@ void gfx_tri(int16_t x, int16_t y, int16_t w, int16_t h, gfx_tri_dir_t dir,
 
 void gfx_bitmap(int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *bits,
                 uint16_t color) {
+  if (band_skips_x(x, w)) {
+    return;
+  }
+
   int16_t stride = (int16_t)((w + 7) / 8);
   int16_t y0 = max16(y, band_y);
   int16_t y1 = min16((int16_t)(y + h), (int16_t)(band_y + band_h));
