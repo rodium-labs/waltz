@@ -8,17 +8,9 @@ This is the display + UI half of the player. Playback is mocked for now: the
 transport, level meter and playlist run off timers so the whole screen can be
 exercised without an SD card or a decoder attached.
 
-![Splash](docs/ui-splash.png)
-
-*The splash in four of the themes.*
-
 ![UI preview](docs/ui-preview.png)
 
 *Splash, the home screen, the track list, the player.*
-
-![Screens](docs/ui-screens.png)
-
-*Player, settings, and the play-mode chord flipping shuffle then repeat.*
 
 ## Wiring
 
@@ -49,13 +41,14 @@ SPI3 SD (PB3/4/5, PA15) pins the audio side will want later.
 
 Onboard LED on PC13 blinks once a second as a heartbeat.
 
-SPI1 runs at 42 MHz (PCLK2 84 MHz / 2), which is the part's ceiling. That is not
-about throughput for its own sake - see [Vsync](#vsync) for why the clock has to
-beat the panel's own scan. Drop `BaudRatePrescaler` in `MX_SPI1_Init()` to `_4`
-if long jumpers start showing noise; that was the known-good setting.
+SPI1 runs at 42 MHz (PCLK2 84 MHz / 2), the part's ceiling. That is for vsync
+rather than throughput: the panel scans a column every 48.8 us, and a frame has
+to be written ahead of that scan to land without a tear. Drop
+`BaudRatePrescaler` in `MX_SPI1_Init()` to `_4` if long jumpers start showing
+noise; that was the known-good setting, and it tears.
 
-The backlight on this module is **active low**: BLK pulled low lights it. That is
-what `ST7789_BLK_ACTIVE_LOW` handles, and `st7789_backlight()` compensates so 0
+The backlight on this module is **active low**: BLK pulled low lights it.
+`ST7789_BLK_ACTIVE_LOW` handles that, and `st7789_backlight()` compensates so 0
 always means dark.
 
 ## Pin map
