@@ -1429,11 +1429,23 @@ static void paint_screen_content(ui_screen_t which) {
 static void paint_slide(void *ud) {
   uint16_t p = *(const uint16_t *)ud;
   int16_t travel = (int16_t)(GFX_W * slide.dir);
+  int16_t from_x = lerp(0, (int16_t)-travel, p);
+  int16_t to_x = lerp(travel, 0, p);
 
-  gfx_translate(lerp(0, (int16_t)-travel, p), 0);
-  paint_screen_content(slide.from);
-  gfx_translate(lerp(travel, 0, p), 0);
-  paint_screen_content(screen);
+  /*
+   * Two whole screens are in flight, but the bands are narrow columns and the
+   * slide is horizontal, so most bands only contain one of them. Asking first
+   * is what keeps a transition inside the time the panel gives us to write it -
+   * painting both everywhere was the one frame that overran the scan.
+   */
+  if (gfx_band_hits(from_x, GFX_W)) {
+    gfx_translate(from_x, 0);
+    paint_screen_content(slide.from);
+  }
+  if (gfx_band_hits(to_x, GFX_W)) {
+    gfx_translate(to_x, 0);
+    paint_screen_content(screen);
+  }
   gfx_translate(0, 0);
 }
 
