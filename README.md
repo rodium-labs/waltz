@@ -186,16 +186,15 @@ tall - so the screen is three columns rather than a stack:
 ```
 
 Each block is an independent redraw region, so only the ones whose data changed
-get repainted - that is what keeps the banded renderer cheap. Row constants and
-the palette live in `Core/Inc/Ui/theme.h`.
+get repainted. Row constants and the palette live in `Core/Inc/Ui/theme.h`.
 
 Portrait (76x284) still works - set `ST7789_ROTATION` to 0 in `st7789.h` - but
 the layout above is built for landscape and will not rearrange itself.
 
 ## Screens
 
-Boot lands on the **home screen** with nothing playing - four tiles, PREV/NEXT
-to pick, PLAY to enter.
+Boot lands on the **home screen** with nothing playing - four tiles, PREV/NEXT to
+pick, PLAY to enter.
 
 | Tile | |
 | ---- | - |
@@ -445,8 +444,8 @@ things: tap to act, hold to go back.
 | VOL-/VOL+ | volume, on the card |
 
 **Settings** - PLAY steps into a row rather than cycling it in place. THEME has
-ten schemes, and overshooting one used to mean nine more presses to come back
-around.
+sixteen schemes, and overshooting one used to mean fifteen more presses to come
+back around.
 
 | | |
 | - | - |
@@ -635,12 +634,12 @@ both. `Font_Roboto16` is Roboto Thin (Apache 2.0).
 ./Tools/uisim/run.sh
 ```
 
-That rewrites every image in `docs/` from the current sources. The stub also
-aborts on any blit that falls outside the panel, so it catches layout overruns
-that would silently corrupt the display.
+That rewrites every image in `docs/` from the current sources. The stub aborts on
+any blit that falls outside the panel, so it catches layout overruns that would
+silently corrupt the display.
 
-Three scripts turn the raw frames into something reviewable, all standard
-library only:
+Three scripts turn the raw frames into something reviewable, all standard library
+only:
 
 | | |
 |---|---|
