@@ -275,6 +275,63 @@ static int16_t right_to(int16_t right, const gfx_font_t *f, const char *s) {
   return (int16_t)(right - gfx_text_w(f, s));
 }
 
+/* Backdrop and glass --------------------------------------------------------
+ *
+ * The panels below are translucent without a framebuffer, and the trick is that
+ * a layer never *reads* what is behind it - it recomputes it. The backdrop is a
+ * formula, so any layer can evaluate the exact pixel underneath itself for
+ * nothing.
+ *
+ * It is also linear in y, which keeps the cost where it was: glass over a
+ * linear backdrop is still linear, so a panel is one gradient fill rather than
+ * a per-pixel composite. Blur falls out for free too - a blurred gradient is
+ * the same gradient.
+ */
+
+/** Backdrop colour for a row: theme background lifted by the track's palette. */
+static uint16_t backdrop_row(int16_t y) {
+  uint16_t top = gfx_mix(COL_BG, Player_Track()->art_top, 46);
+  uint8_t p;
+
+  if (y < 0) {
+    y = 0;
+  } else if (y >= GFX_H) {
+    y = GFX_H - 1;
+  }
+  p = (uint8_t)(((int32_t)y * 255) / (GFX_H - 1));
+  return gfx_mix(top, COL_BG, p);
+}
+
+/** Fill a region with the backdrop. Replaces every flat background fill. */
+static void paint_backdrop(int16_t x, int16_t y, int16_t w, int16_t h) {
+  gfx_vgrad(x, y, w, h, backdrop_row(y), backdrop_row((int16_t)(y + h - 1)));
+}
+
+/** Below this height a pane gets its rim but no specular top edge. */
+#define GLASS_LIT_MIN_H 16
+
+/**
+ * @brief Frosted panel: backdrop showing through, with a lit rim.
+ *
+ * The rim is what sells it. A flat translucent rectangle reads as a faded box;
+ * a brighter edge along the top and a rim all the way round reads as a pane
+ * catching light.
+ */
+static void glass_panel(int16_t x, int16_t y, int16_t w, int16_t h, int16_t r,
+                        uint8_t alpha, uint16_t tint) {
+  uint16_t top = gfx_mix(backdrop_row(y), tint, alpha);
+  uint16_t bot = gfx_mix(backdrop_row((int16_t)(y + h - 1)), tint, alpha);
+
+  gfx_rrect_grad(x, y, w, h, r, top, bot);
+  gfx_rrect_ring(x, y, w, h, r, 1, gfx_mix(top, COL_TEXT, 45));
+  /* The specular edge only reads as glass on a pane deep enough to have a
+   * surface. On a menu row it just crowds the line above it. */
+  if (h >= GLASS_LIT_MIN_H) {
+    gfx_hline((int16_t)(x + r), y, (int16_t)(w - 2 * r),
+              gfx_mix(top, COL_TEXT, 95));
+  }
+}
+
 /* Shared glyphs ----------------------------------------------------------- */
 
 /**
@@ -330,7 +387,7 @@ static void draw_battery(int16_t x, int16_t y, uint8_t pct) {
   uint16_t c = (pct <= 15U) ? COL_RED : ((pct <= 35U) ? COL_AMBER : COL_GREEN);
   int16_t fill = (int16_t)(((int32_t)12 * pct + 50) / 100);
 
-  gfx_rrect_ring(x, y, 16, 9, 3, 1, COL_TEXT_MUTE);
+  gfx_rrect_ring(x, y, 16, 9, 3, 1, COL_TEXT_DIM);
   gfx_rrect((int16_t)(x + 16), (int16_t)(y + 3), 2, 3, 1, COL_TEXT_MUTE);
   if (fill > 0) {
     gfx_rrect((int16_t)(x + 2), (int16_t)(y + 2), fill, 5, 1, c);
@@ -375,8 +432,9 @@ static void paint_bar(void *ud) {
   (void)ud;
   /* The bar sits on the background with a hairline under it rather than on a
    * filled block: chrome should recede and let the content read first. */
-  gfx_fill(0, 0, GFX_W, BAR_H, COL_BG);
-  gfx_hline(0, BAR_H - 1, GFX_W, gfx_mix(COL_BG, COL_TEXT_MUTE, 70));
+  gfx_vgrad(0, 0, GFX_W, BAR_H, gfx_mix(backdrop_row(0), COL_TEXT, 20),
+            gfx_mix(backdrop_row(BAR_H - 1), COL_TEXT, 20));
+  gfx_hline(0, BAR_H - 1, GFX_W, gfx_mix(COL_BG, COL_TEXT_MUTE, 90));
 
   /* Playback state, visible from every screen. */
   if (player.playing) {
@@ -421,16 +479,15 @@ static void paint_home(void *ud) {
   uint8_t i;
 
   (void)ud;
-  gfx_fill(0, CONTENT_Y, GFX_W, CONTENT_H, COL_BG);
+  paint_backdrop(0, CONTENT_Y, GFX_W, CONTENT_H);
 
   /* Plates first, then the focus fill over the one it is on, then all the tile
    * content, then the ring. Anything drawn after the content would wipe it. */
   for (i = 0; i < HOME_TILES; ++i) {
-    gfx_rrect(home_tile_x(i), HOME_TILE_Y, HOME_TILE_W, HOME_TILE_H, 12,
-              gfx_mix(COL_BG, COL_CARD, 200));
+    glass_panel(home_tile_x(i), HOME_TILE_Y, HOME_TILE_W, HOME_TILE_H, 12, 22,
+                COL_TEXT);
   }
-  gfx_rrect(fx, HOME_TILE_Y, HOME_TILE_W, HOME_TILE_H, 12,
-            gfx_mix(COL_BG, COL_ACCENT, 45));
+  glass_panel(fx, HOME_TILE_Y, HOME_TILE_W, HOME_TILE_H, 12, 52, COL_ACCENT);
 
   for (i = 0; i < HOME_TILES; ++i) {
     int16_t x = home_tile_x(i);
@@ -484,7 +541,7 @@ static void paint_marquee(void *ud) {
   int16_t ty = (int16_t)(m->y + (m->h - m->font->height) / 2);
   uint16_t fg = m->dim ? COL_TEXT_DIM : COL_TEXT;
 
-  gfx_fill(m->x, m->y, m->w, m->h, COL_BG);
+  paint_backdrop(m->x, m->y, m->w, m->h);
 
   /* Explicit, because this is also called from the whole-screen repaint where
    * the flush region is the entire panel and would clip nothing. */
@@ -543,7 +600,7 @@ static void paint_art(void *ud) {
   int16_t r;
 
   (void)ud;
-  gfx_fill(0, CONTENT_Y, ART_ZONE_W, CONTENT_H, COL_BG);
+  paint_backdrop(0, CONTENT_Y, ART_ZONE_W, CONTENT_H);
 
   gfx_rrect_grad(ART_X, ART_Y, ART_SIZE, ART_SIZE, 10, t->art_top,
                  t->art_bottom);
@@ -565,7 +622,7 @@ static void paint_bar_row(void *ud) {
   int16_t fw;
 
   (void)ud;
-  gfx_fill(MID_X, ROW_BAR_Y, MID_W, ROW_BAR_H, COL_BG);
+  paint_backdrop(MID_X, ROW_BAR_Y, MID_W, ROW_BAR_H);
 
   gfx_rrect(MID_X, ty, MID_W, 3, 1, gfx_mix(COL_BG, COL_CARD_HI, 220));
 
@@ -589,7 +646,7 @@ static void paint_time(void *ud) {
   char right[8];
 
   (void)ud;
-  gfx_fill(MID_X, ROW_TIME_Y, MID_W, ROW_TIME_H, COL_BG);
+  paint_backdrop(MID_X, ROW_TIME_Y, MID_W, ROW_TIME_H);
 
   fmt_mmss(left, player.elapsed_s);
   fmt_mmss(right, t->duration_s);
@@ -605,7 +662,7 @@ static void paint_format(void *ud) {
   char *p;
 
   (void)ud;
-  gfx_fill(MID_X, ROW_FORMAT_Y, MID_W, ROW_FORMAT_H, COL_BG);
+  paint_backdrop(MID_X, ROW_FORMAT_Y, MID_W, ROW_FORMAT_H);
 
   p = put_u16(buf, t->bitrate_kbps, 1);
   strcpy(p, " kbps");
@@ -617,7 +674,7 @@ static void paint_transport(void *ud) {
   const int16_t cy = ROW_TRANSPORT_Y + ROW_TRANSPORT_H / 2;
 
   (void)ud;
-  gfx_fill(RIGHT_X, ROW_TRANSPORT_Y, RIGHT_W, ROW_TRANSPORT_H, COL_BG);
+  paint_backdrop(RIGHT_X, ROW_TRANSPORT_Y, RIGHT_W, ROW_TRANSPORT_H);
 
   /* The end bars are what say "previous track" rather than "rewind". */
   gfx_fill(208, (int16_t)(cy - 5), 2, 10, COL_TEXT_DIM);
@@ -647,7 +704,7 @@ static void paint_meter(void *ud) {
   uint8_t i;
 
   (void)ud;
-  gfx_fill(RIGHT_X, ROW_METER_Y, RIGHT_W, ROW_METER_H, COL_BG);
+  paint_backdrop(RIGHT_X, ROW_METER_Y, RIGHT_W, ROW_METER_H);
 
   for (i = 0; i < SPECTRUM_BARS; ++i) {
     int16_t bx = (int16_t)(METER_X + i * (METER_BAR_W + METER_GAP));
@@ -831,7 +888,7 @@ static void paint_menu(void *ud) {
   char value[MENU_VALUE_MAX];
   uint8_t row;
 
-  gfx_fill(0, CONTENT_Y, GFX_W, CONTENT_H, COL_BG);
+  paint_backdrop(0, CONTENT_Y, GFX_W, CONTENT_H);
 
   {
     /* Highlight first, then the rows on top of it, so it reads as a surface
@@ -839,8 +896,7 @@ static void paint_menu(void *ud) {
     uint16_t p = ease_out(HAL_GetTick() - move_start, ANIM_SELECT_MS);
     int16_t hy = lerp(sel_y_from, sel_y_to, p);
 
-    gfx_rrect(3, hy, (int16_t)(GFX_W - 6), MENU_ROW_H, 4,
-              gfx_mix(COL_BG, COL_ACCENT, 45));
+    glass_panel(2, hy, (int16_t)(GFX_W - 4), MENU_ROW_H, 4, 46, COL_ACCENT);
   }
 
   for (row = 0; row < MENU_ROWS; ++row) {
@@ -1099,7 +1155,7 @@ void Ui_Splash(void) {
  */
 static void paint_player_all(void *ud) {
   (void)ud;
-  gfx_fill(0, CONTENT_Y, GFX_W, CONTENT_H, COL_BG);
+  paint_backdrop(0, CONTENT_Y, GFX_W, CONTENT_H);
   paint_art(NULL);
   paint_marquee(&title_mq);
   paint_marquee(&artist_mq);
