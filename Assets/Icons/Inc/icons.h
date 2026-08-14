@@ -11,7 +11,5 @@
 
 /** Eighth note, 7x9. */
 extern const uint8_t icon_note[9];
-/** Over-ear headphones, 12x8. */
-extern const uint8_t icon_headphones[16];
 /** Speaker with three arcs, 10x9. */
 extern const uint8_t icon_speaker[18];
