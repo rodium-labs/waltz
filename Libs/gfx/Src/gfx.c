@@ -1,7 +1,13 @@
 #include "gfx.h"
 
-/* The one scratch band every primitive writes into. */
-static uint16_t band[GFX_W * GFX_BAND_H];
+/*
+ * Two bands, not one: gfx_flush() draws into the spare while the DMA is still
+ * pushing the other, so the panel transfer and the drawing overlap instead of
+ * taking turns. The pointer is what every primitive writes through, so nothing
+ * below this line has to know which one is live.
+ */
+static uint16_t band_mem[2][GFX_BAND_W * GFX_H];
+static uint16_t *band = band_mem[0];
 
 /*
  * Where the band lands on the panel, and separately the coordinate origin the
@@ -19,6 +25,9 @@ static int16_t band_x, band_y, band_w, band_h;
 #define CLIP_OPEN 16384
 static int16_t clip_x0 = -CLIP_OPEN, clip_y0 = -CLIP_OPEN;
 static int16_t clip_x1 = CLIP_OPEN, clip_y1 = CLIP_OPEN;
+
+/* Armed by gfx_sync_next(), consumed by the next gfx_flush(). */
+static bool sync_pending;
 
 static inline int16_t min16(int16_t a, int16_t b) { return a < b ? a : b; }
 static inline int16_t max16(int16_t a, int16_t b) { return a > b ? a : b; }
@@ -240,7 +249,8 @@ static int16_t isqrt(int32_t v) {
 
 void gfx_flush(int16_t x, int16_t y, int16_t w, int16_t h, gfx_paint_fn paint,
                void *ud) {
-  int16_t yy;
+  static uint8_t slot;
+  int16_t xx;
 
   if (x < 0) {
     w = (int16_t)(w + x);
@@ -260,19 +270,41 @@ void gfx_flush(int16_t x, int16_t y, int16_t w, int16_t h, gfx_paint_fn paint,
     return;
   }
 
-  for (yy = y; yy < y + h; yy = (int16_t)(yy + GFX_BAND_H)) {
+  /* One sync per UI frame, not per flush: a screen made of several regions is
+   * still one frame, and waiting for the scan before each of them would cost a
+   * whole panel refresh apiece. */
+  if (sync_pending) {
+    sync_pending = false;
+    st7789_wait_vblank();
+  }
+
+  for (xx = x; xx < x + w; xx = (int16_t)(xx + GFX_BAND_W)) {
     gfx_clip_reset();
-    blit_x = x;
-    blit_y = yy;
-    band_x = x;
-    band_y = yy;
-    band_w = w;
-    band_h = min16(GFX_BAND_H, (int16_t)(y + h - yy));
+    band = band_mem[slot];
+    blit_x = xx;
+    blit_y = y;
+    band_x = xx;
+    band_y = y;
+    band_w = min16(GFX_BAND_W, (int16_t)(x + w - xx));
+    band_h = h;
 
     paint(ud);
-    st7789_blit((uint16_t)blit_x, (uint16_t)blit_y, (uint16_t)band_w,
-                (uint16_t)band_h, band);
+    /* The previous band has had the whole of this one's drawing time to get
+     * down the wire, so this usually returns immediately. */
+    st7789_blit_wait();
+    st7789_blit_start((uint16_t)blit_x, (uint16_t)blit_y, (uint16_t)band_w,
+                      (uint16_t)band_h, band);
+    slot ^= 1U;
   }
+  st7789_blit_wait();
+}
+
+void gfx_sync_next(void) { sync_pending = true; }
+
+bool gfx_band_hits(int16_t x, int16_t w) {
+  /* Screen coordinates, so this is asked before gfx_translate() moves the
+   * drawing origin - the point is to decide whether to draw at all. */
+  return (x < (int16_t)(blit_x + band_w)) && ((int16_t)(x + w) > blit_x);
 }
 
 void gfx_clip(int16_t x, int16_t y, int16_t w, int16_t h) {

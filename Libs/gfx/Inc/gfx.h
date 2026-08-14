@@ -4,8 +4,8 @@
  *
  * A full framebuffer for this panel would be 284*76*2 = 42 kB out of the
  * F401's 64 kB, which leaves nothing for an MP3 decoder later on. Instead the
- * screen is painted a horizontal strip at a time through a single
- * GFX_W x GFX_BAND_H scratch buffer (9 kB).
+ * screen is painted a vertical strip at a time through a pair of
+ * GFX_BAND_W x GFX_H scratch buffers (4.8 kB each).
  *
  * Everything is drawn from inside a paint callback:
  *
@@ -16,7 +16,8 @@
  *     gfx_flush(190, 20, 88, 20, paint_thing, NULL);
  *
  * gfx_flush() splits the rectangle into bands, calls @c paint once per band and
- * pushes each band to the panel. All coordinates stay in absolute panel space;
+ * pushes each band to the panel, drawing the next while the last is still on the
+ * wire. All coordinates stay in absolute panel space;
  * anything falling outside the current band is clipped away, which is also how
  * marquees get their clipping for free.
  */
@@ -33,8 +34,19 @@
 #define GFX_W ST7789_W
 #define GFX_H ST7789_H
 
-/** Rows per band. 284 * 16 * 2 = 9088 bytes of scratch. */
-#define GFX_BAND_H 16
+/**
+ * Columns per band. 32 * 76 * 2 = 4864 bytes of scratch, two of them.
+ *
+ * Bands run down the screen rather than across it, which looks like the wrong
+ * way round until you know which way the panel scans. In landscape the 284 px
+ * dimension is the one laid on the controller's gate lines, so the scan sweeps
+ * sideways. A band that spanned the full width would touch every scan line, and
+ * the last band would always land behind the beam no matter when the frame
+ * started - which is exactly the tear that survived the first vsync attempt.
+ * Splitting by column instead means each band is a slice of the scan's path,
+ * and the write walks the same way the beam does, staying in front of it.
+ */
+#define GFX_BAND_W 64
 
 /**
  * Pixels are DMAed out of the band buffer byte by byte, and this core is
@@ -86,6 +98,24 @@ void gfx_flush(int16_t x, int16_t y, int16_t w, int16_t h, gfx_paint_fn paint,
 
 /** Flood the whole panel. Cheap - goes straight to the controller. */
 void gfx_clear(uint16_t color);
+
+/**
+ * @brief Line the next flush up with the panel's scanout.
+ *
+ * Call once per UI frame, before any drawing. The first gfx_flush() after it
+ * waits for the scan to leave the visible strip, so the whole frame goes down
+ * ahead of the beam; later flushes in the same frame are already inside that
+ * window and do not wait again.
+ */
+void gfx_sync_next(void);
+
+/**
+ * @brief Does the span @p x..x+w reach the band being painted?
+ *
+ * For callers that can skip something far larger than a primitive - a whole
+ * screen mid-transition, say. Screen coordinates, asked before gfx_translate().
+ */
+bool gfx_band_hits(int16_t x, int16_t w);
 
 /**
  * @brief Shift the coordinate origin the primitives draw against.
