@@ -504,12 +504,29 @@ the last valid record - 8192 saves before an erase is needed. See
 
 ![Themes](docs/ui-themes-a.png)
 ![Themes](docs/ui-themes-b.png)
+![Themes](docs/ui-themes-c.png)
 
-*The player screen in all ten schemes.*
+*The player screen in all sixteen schemes.*
 
-Ten of them in `Core/Src/Ui/theme.c`: `NIGHT`, `AMBER`, `MINT`, `PAPER` (light),
-`TERMINAL`, `OCEAN`, `ROSE`, `SLATE`, `SUNSET` and `MONO`. Switch from the
-settings page; the change applies to every screen immediately.
+Sixteen of them in `Core/Src/Ui/theme.c`: `NIGHT`, `AMBER`, `MINT`, `PAPER`
+(light), `TERMINAL`, `OCEAN`, `ROSE`, `SLATE`, `SUNSET`, `MONO`, `VIOLET`,
+`FROST` (light), `EMBER`, `NEON`, `SEPIA` and `FOREST`. Switch from the settings
+page; the change applies to every screen immediately, and PREV/NEXT step either
+way once you are inside the row.
+
+Two of them are chosen to be awkward on purpose. `PAPER` and `FROST` are light -
+one warm, one cool - and they are what catch anywhere the UI quietly assumed a
+dark background; a frosted panel over a light backdrop has to come out darker
+than what is behind it rather than lighter. `MONO` is greyscale except for red,
+because a low battery that reads as one more shade of grey is no warning at all.
+The same trap caught `EMBER`, where everything is in the red family: its accent
+is orange and its warning crimson, so the two are told apart by hue rather than
+by being red.
+
+There is one rule a new scheme has to respect beyond legibility. Since the
+backdrop takes its tint from the cover art, `bg` has to stay far enough from mid
+grey that a frosted panel drawn over it still reads as a panel - a scheme sitting
+halfway has nowhere to go.
 
 The splash follows the stored theme too, which is why `Settings_Load()` runs
 before `Ui_Splash()` in `main()` - load it later and the splash comes up in the
