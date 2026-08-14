@@ -148,6 +148,15 @@ void gfx_disc(int16_t cx, int16_t cy, int16_t r, uint16_t color);
 /** Annulus from @p r_in (exclusive) to @p r_out (inclusive). */
 void gfx_ring(int16_t cx, int16_t cy, int16_t r_out, int16_t r_in,
               uint16_t color);
+/**
+ * @brief One pixel wide circle outline.
+ *
+ * Not the same as gfx_ring() with r_in = r_out - 1. That is a true annulus, and
+ * near the top and bottom a scanline crosses it almost horizontally, so it
+ * flares into a wide cap. This strokes the curve instead, so the line stays one
+ * pixel all the way round.
+ */
+void gfx_circle(int16_t cx, int16_t cy, int16_t r, uint16_t color);
 /** Isoceles triangle filling @p w x @p h, apex on the left or right edge. */
 void gfx_tri(int16_t x, int16_t y, int16_t w, int16_t h, gfx_tri_dir_t dir,
              uint16_t color);

@@ -564,8 +564,46 @@ void gfx_ring(int16_t cx, int16_t cy, int16_t r_out, int16_t r_in,
   }
 }
 
+void gfx_circle(int16_t cx, int16_t cy, int16_t r, uint16_t color) {
+  if (band_skips_x((int16_t)(cx - r), (int16_t)(2 * r + 1))) {
+    return;
+  }
+
+  int16_t x = 0;
+  int16_t y = r;
+  int16_t d = (int16_t)(3 - 2 * r);
+
+  if (r <= 0) {
+    gfx_pixel(cx, cy, color);
+    return;
+  }
+
+  while (x <= y) {
+    gfx_pixel((int16_t)(cx + x), (int16_t)(cy + y), color);
+    gfx_pixel((int16_t)(cx - x), (int16_t)(cy + y), color);
+    gfx_pixel((int16_t)(cx + x), (int16_t)(cy - y), color);
+    gfx_pixel((int16_t)(cx - x), (int16_t)(cy - y), color);
+    gfx_pixel((int16_t)(cx + y), (int16_t)(cy + x), color);
+    gfx_pixel((int16_t)(cx - y), (int16_t)(cy + x), color);
+    gfx_pixel((int16_t)(cx + y), (int16_t)(cy - x), color);
+    gfx_pixel((int16_t)(cx - y), (int16_t)(cy - x), color);
+
+    if (d < 0) {
+      d = (int16_t)(d + 4 * x + 6);
+    } else {
+      d = (int16_t)(d + 4 * (x - y) + 10);
+      --y;
+    }
+    ++x;
+  }
+}
+
 void gfx_tri(int16_t x, int16_t y, int16_t w, int16_t h, gfx_tri_dir_t dir,
              uint16_t color) {
+  if (band_skips_x(x, w)) {
+    return;
+  }
+
   int16_t y0 = max16(y, band_y);
   int16_t y1 = min16((int16_t)(y + h), (int16_t)(band_y + band_h));
   int16_t span = (int16_t)(h - 1);
