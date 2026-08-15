@@ -836,8 +836,14 @@ static void paint_format(void *ud) {
   (void)ud;
   paint_backdrop(MID_X, ROW_FORMAT_Y, MID_W, ROW_FORMAT_H);
 
-  p = put_u16(buf, t->bitrate_kbps, 1);
-  strcpy(p, " kbps");
+  if (t->bitrate_kbps == 0U) {
+    /* Nothing on the host link carries a bitrate, so the row says where the
+     * track came from instead of inventing a number. */
+    strcpy(buf, "USB SHELL");
+  } else {
+    p = put_u16(buf, t->bitrate_kbps, 1);
+    strcpy(p, " kbps");
+  }
   gfx_text(MID_X, (int16_t)(ROW_FORMAT_Y + 1), &Font_Mono6x8, buf,
            COL_TEXT_MUTE);
 }
