@@ -25,6 +25,8 @@
 #include "player.h"
 #include "player_ui.h"
 #include "power.h"
+#include "shell.h"
+#include "usb_device.h"
 #include "settings.h"
 #include "st7789.h"
 /* USER CODE END Includes */
@@ -140,6 +142,8 @@ int main(void)
   Ui_Splash();
 
   Power_Init();
+  Shell_Init();
+  USB_Device_Init();
   Input_Init();
   Player_Init();
   Ui_Init();

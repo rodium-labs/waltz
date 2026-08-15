@@ -54,6 +54,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/settings.c
     Core/Src/power.c
     Core/Src/shell.c
+    Core/Src/usb_device.c
+    Core/Src/usbd_cdc_if.c
     Core/Src/usbd_conf.c
     Core/Src/usbd_desc.c
     Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_core.c

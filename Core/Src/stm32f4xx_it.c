@@ -57,6 +57,7 @@
 /* External variables --------------------------------------------------------*/
 
 /* USER CODE BEGIN EV */
+extern PCD_HandleTypeDef hpcd_USB_OTG_FS;
 
 /* USER CODE END EV */
 
@@ -199,5 +200,17 @@ void SysTick_Handler(void)
 /******************************************************************************/
 
 /* USER CODE BEGIN 1 */
+
+/**
+ * @brief Everything USB happens in here.
+ *
+ * The CDC receive callback runs off this, which is why Shell_Feed() has to be
+ * safe to call from an interrupt - it is only ever touching its own line buffer
+ * and the shell state the main loop reads.
+ */
+void OTG_FS_IRQHandler(void)
+{
+  HAL_PCD_IRQHandler(&hpcd_USB_OTG_FS);
+}
 
 /* USER CODE END 1 */
