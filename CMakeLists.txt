@@ -53,6 +53,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/input.c
     Core/Src/settings.c
     Core/Src/power.c
+    Core/Src/shell.c
     Core/Src/Ui/player_ui.c
     Core/Src/Ui/theme.c
 )
