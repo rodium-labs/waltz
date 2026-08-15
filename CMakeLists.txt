@@ -54,6 +54,12 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/settings.c
     Core/Src/power.c
     Core/Src/shell.c
+    Core/Src/usbd_conf.c
+    Core/Src/usbd_desc.c
+    Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_core.c
+    Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_ctlreq.c
+    Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_ioreq.c
+    Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Src/usbd_cdc.c
     Core/Src/Ui/player_ui.c
     Core/Src/Ui/theme.c
 )
@@ -65,6 +71,8 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     Libs/st7789/Inc
     Libs/gfx/Inc
     Core/Inc/Ui
+    Middlewares/ST/STM32_USB_Device_Library/Core/Inc
+    Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Inc
 )
 
 # Add project symbols (macros)
