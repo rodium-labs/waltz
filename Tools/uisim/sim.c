@@ -64,6 +64,13 @@ void st7789_backlight(uint8_t percent) { (void)percent; }
 void st7789_set_color_mode(bool bgr, bool invert) { (void)bgr; (void)invert; }
 void st7789_gram_probe(void) {}
 void st7789_read_probe(void) {}
+/* No cable on the host, so shell mode never goes live and the mock keeps
+ * driving every scene. */
+#include "shell.h"
+shell_t shell;
+void Shell_Init(void) {}
+void Shell_Feed(uint8_t b) { (void)b; }
+bool Shell_Live(uint32_t now) { (void)now; return false; }
 void st7789_sync_calibrate(void) {}
 uint16_t st7789_scanline(void) { return 0U; }
 /* Nothing to sync against on the host. */

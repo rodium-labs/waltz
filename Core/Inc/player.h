@@ -62,6 +62,18 @@ typedef struct {
 
 extern player_t player;
 
+/**
+ * @brief Is the player showing what a host is playing rather than the mock?
+ *
+ * True only when the setting is on *and* the link is talking. A cable pulled
+ * mid-song falls back rather than freezing, which is the difference between a
+ * stale screen and one that looks crashed.
+ */
+bool Player_ShellActive(uint32_t now);
+
+/** Changes whenever the now-playing track does, whatever the source. */
+uint16_t Player_TrackGeneration(void);
+
 /** Starts paused on the first track: the home screen greets you, not audio. */
 void Player_Init(void);
 

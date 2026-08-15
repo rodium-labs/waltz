@@ -1,6 +1,8 @@
 #include "player.h"
 
+#include "main.h"
 #include "settings.h"
+#include "shell.h"
 #include "theme.h"
 
 /* Titles are ASCII only - the fonts stop at 0x7E, so anything outside that would
@@ -115,7 +117,65 @@ void Player_Init(void) {
   demo_pause_done = false;
 }
 
-const track_t *Player_Track(void) { return &playlist[player.index]; }
+/*
+ * Shell mode replaces the playlist with whatever the host is playing. It is
+ * done here rather than in the UI on purpose: every screen already goes through
+ * Player_Track() and player.*, so filling those in from the link means not one
+ * line of drawing code has to know the difference.
+ */
+bool Player_ShellActive(uint32_t now) {
+  return (settings.shell != 0U) && Shell_Live(now);
+}
+
+/* Filled from the link on demand. The strings point into the shell's own
+ * buffers, which outlive any single frame. */
+static track_t shell_track;
+
+/*
+ * A stable palette per title, so two tracks in a row do not share a cover.
+ * Real artwork replaces this the moment the host sends any.
+ */
+static void shell_palette(track_t *t) {
+  uint32_t h = 2166136261U;
+  const char *p = shell.title;
+  uint8_t r, g, b;
+
+  while (*p != '\0') {
+    h = (h ^ (uint32_t)(uint8_t)*p++) * 16777619U;
+  }
+  r = (uint8_t)(80U + (h & 0x7FU));
+  g = (uint8_t)(80U + ((h >> 8) & 0x7FU));
+  b = (uint8_t)(80U + ((h >> 16) & 0x7FU));
+
+  t->art_top = GFX_RGB(r, g, b);
+  t->art_bottom = GFX_RGB(r / 2U, g / 2U, b / 2U);
+  t->art_label = GFX_RGB(220, 200, 160);
+}
+
+/*
+ * What the UI latches "this is a different song" against. The playlist index is
+ * only half the answer once a host can change the track without the index ever
+ * moving.
+ */
+uint16_t Player_TrackGeneration(void) {
+  if (Player_ShellActive(HAL_GetTick())) {
+    /* Offset so a fall back to the mock always reads as a change. */
+    return (uint16_t)(0x8000U + shell.generation);
+  }
+  return player.index;
+}
+
+const track_t *Player_Track(void) {
+  if (Player_ShellActive(HAL_GetTick())) {
+    shell_track.title = shell.title[0] ? shell.title : "-";
+    shell_track.artist = shell.artist[0] ? shell.artist : "-";
+    shell_track.duration_s = shell.duration_s;
+    shell_track.bitrate_kbps = 0U; /* the host does not know, and says so */
+    shell_palette(&shell_track);
+    return &shell_track;
+  }
+  return &playlist[player.index];
+}
 
 const track_t *Player_NextTrack(void) {
   return &playlist[(player.index + 1U) % PLAYLIST_LEN];
@@ -322,6 +382,45 @@ static void tick_level(bool beat) {
 
 void Player_Tick(uint32_t now) {
   bool beat = false;
+
+  /*
+   * With the link live the host owns the transport and the meter, so the mock
+   * is skipped entirely rather than run underneath and overwritten - otherwise
+   * the demo would keep advancing tracks behind a screen showing someone
+   * else's.
+   */
+  if (Player_ShellActive(now)) {
+    uint8_t i;
+
+    player.elapsed_s = shell.elapsed_s;
+    player.playing = shell.playing;
+    if (shell.volume != 0U) {
+      player.volume = shell.volume;
+    }
+    if (shell.has_bars) {
+      for (i = 0U; i < SPECTRUM_BARS; ++i) {
+        player.level[i] = shell.level[i];
+        if (shell.level[i] >= player.peak[i]) {
+          player.peak[i] = shell.level[i];
+        } else if (player.peak[i] > 0U) {
+          player.peak[i]--;
+        }
+      }
+    } else {
+      /* No spectrum on this link, so the mock keeps the meter moving rather
+       * than leaving it frozen on the last thing anyone sent. */
+      tick_level(false);
+    }
+    if (player.playing && play_last != 0U) {
+      play_ms += now - play_last;
+      while (play_ms >= 1000U) {
+        play_ms -= 1000U;
+        stats.listen_s++;
+      }
+    }
+    play_last = now;
+    return;
+  }
 
   /* Count wall-clock playback, not transport ticks - the transport runs fast
    * while there is nothing to decode, and the lifetime total should not. */
