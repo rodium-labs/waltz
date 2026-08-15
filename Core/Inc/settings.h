@@ -23,7 +23,7 @@ typedef struct {
   uint8_t volume;     /**< 0..100 %.                                       */
   uint8_t shuffle;
   uint8_t repeat;
-  uint8_t reserved;   /**< Keeps the struct a round 8 bytes.               */
+  uint8_t shell;      /**< Shell mode: take the track from the host link.   */
 } settings_t;
 
 /**

@@ -38,7 +38,7 @@ settings_t settings = {
     .volume = 68U,
     .shuffle = 0U,
     .repeat = 0U,
-    .reserved = 0U,
+    .shell = 0U, /* off: a board on a desk with no cable should still play */
 };
 
 stats_t stats;
