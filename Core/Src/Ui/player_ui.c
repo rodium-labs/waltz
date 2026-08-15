@@ -98,6 +98,7 @@ enum {
   SET_FADE,
   SET_SHUFFLE,
   SET_REPEAT,
+  SET_SHELL,
   SET_INFO,
   SET_COUNT,
 };
@@ -957,6 +958,19 @@ static void settings_row(uint8_t entry, char *label, char *value,
       *color = COL_ACCENT3;
     }
     break;
+  case SET_SHELL:
+    strcpy(label, "SHELL");
+    /* Three states, not two: the setting can be on with nothing on the other
+     * end of the cable, and that is worth saying out loud. */
+    if (settings.shell == 0U) {
+      strcpy(value, "OFF");
+    } else if (Player_ShellActive(HAL_GetTick())) {
+      strcpy(value, "LIVE");
+      *color = COL_ACCENT3;
+    } else {
+      strcpy(value, "WAITING");
+    }
+    break;
   default:
     /* No value: it opens a screen rather than holding a setting, and a row with
      * nothing on the right reads as an action instead of a choice. */
@@ -1675,6 +1689,9 @@ static void setting_step(int8_t dir) {
   case SET_REPEAT:
     Player_ToggleRepeat();
     break;
+  case SET_SHELL:
+    settings.shell = (uint8_t)(settings.shell ? 0U : 1U);
+    break;
   default:
     break; /* SET_INFO has no value to step */
   }
@@ -1699,7 +1716,8 @@ static void menu_activate(void) {
 
   /* On/off rows have nothing to scroll through, so PLAY just flips them and
    * never traps the buttons in an edit mode with two states. */
-  if (set_sel == SET_SHUFFLE || set_sel == SET_REPEAT) {
+  if (set_sel == SET_SHUFFLE || set_sel == SET_REPEAT ||
+      set_sel == SET_SHELL) {
     setting_step(1);
     return;
   }

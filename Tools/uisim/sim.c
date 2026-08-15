@@ -213,6 +213,7 @@ enum {
   SET_FADE,
   SET_SHUFFLE,
   SET_REPEAT,
+  SET_SHELL,
   SET_INFO,
   SET_ROWS
 };
