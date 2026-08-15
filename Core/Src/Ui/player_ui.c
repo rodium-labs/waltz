@@ -377,6 +377,7 @@ static struct {
   bool playing;
   bool shuffle;
   bool repeat;
+  bool shell_live;
   uint16_t gen;
 } shown;
 
@@ -2119,6 +2120,18 @@ void Ui_Tick(uint32_t now) {
       meter_at = now;
       page_dirty = true;
       elsewhere = true;
+    }
+    /* The SHELL row reports the link, which comes and goes without anyone
+     * pressing anything - so the page has to notice rather than wait for a
+     * keypress to repaint it. */
+    if (screen == UI_SETTINGS) {
+      bool live = Player_ShellActive(now);
+
+      if (live != shown.shell_live) {
+        shown.shell_live = live;
+        page_dirty = true;
+        elsewhere = true;
+      }
     }
     if (page_dirty) {
       int16_t y = CONTENT_Y;
