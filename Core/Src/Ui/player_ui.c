@@ -377,6 +377,7 @@ static struct {
   bool playing;
   bool shuffle;
   bool repeat;
+  uint16_t gen;
 } shown;
 
 /* Small formatters - avoids dragging newlib's printf in for a few strings. */
@@ -1913,6 +1914,7 @@ static void handle_input(uint32_t now) {
 static void latch(void) {
   shown.screen = screen;
   shown.index = player.index;
+  shown.gen = Player_TrackGeneration();
   shown.elapsed_s = player.elapsed_s;
   shown.volume = player.volume;
   shown.battery = player.battery;
@@ -2010,7 +2012,7 @@ void Ui_Tick(uint32_t now) {
   if (shown.battery != player.battery || shown.volume != player.volume ||
       shown.playing != player.playing || shown.shuffle != player.shuffle ||
       shown.repeat != player.repeat || shown.screen != screen ||
-      (screen == UI_NOW && shown.index != player.index)) {
+      (screen == UI_NOW && shown.gen != Player_TrackGeneration())) {
     bar_dirty = true;
   }
 
@@ -2184,7 +2186,7 @@ void Ui_Tick(uint32_t now) {
     page_dirty = false;
   }
 
-  if (shown.index != player.index) {
+  if (shown.gen != Player_TrackGeneration()) {
     /*
      * A new track moves the backdrop, because its colour comes from the cover.
      * That is every pixel of the screen, not just the widgets carrying track
